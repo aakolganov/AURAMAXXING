@@ -77,14 +77,23 @@ class Lammps_interface:
         #     self.atoms = self.atoms[current_best_fragment]
         #     self.xyz_coords = self.xyz_coords[current_best_fragment]
         self.write_xyz("final_struc_convert")
-        self.remove_2MR()
-        self.write_xyz("yeet_2MR")
         self.remove_over_coord({"Si": 4, "O": 2}, 2.0)
         self.write_xyz("yeet_over")
+        self.remove_2MR()
+        self.write_xyz("yeet_2MR")
         os.chdir("..")
 
         return self.atoms, self.xyz_coords, self.dims
-
+    
+    def compact_box(self):
+        try:
+            os.mkdir("LAMMPS")
+        except:
+            ...
+        os.chdir("LAMMPS")
+        
+        self._write_data_file()
+    
     def add_structure(self, atoms, xyz_coords):
         self.atoms = np.array(atoms, dtype=str)
         self.xyz_coords = np.array(xyz_coords, dtype=float)
@@ -219,15 +228,58 @@ dump_modify     xyz  element Si O
 minimize        1.0e-4  1.0e-6  1000  10000
 velocity        mobile create 1.0 {} dist gaussian
 fix             1 mobile nve
-fix             3 mobile press/berendsen z 1.0 1.0 100 modulus 360000
-fix             4 mobile temp/berendsen 1.0 298 100
+#fix             3 mobile press/berendsen z 1.0 1.0 100 modulus 360000
+fix             4 mobile temp/berendsen 1.0 1000 100
 run             {}
                     
-fix             4 mobile temp/berendsen 298 1.0 100
+fix             4 mobile temp/berendsen 1000 1.0 100
 run             {} 
                     
 write_data      final_struc.data""".format(np.random.randint(0, 10000), int(steps), int(steps)))
     
+    def _write_in_file_compact(self, steps: int):
+        with open("instruction.in", "w") as f:
+            f.write("""units           real
+atom_style      charge
+boundary        p p p
+
+read_data       structure.data
+
+pair_style      hybrid/overlay buck/coul/long 5.5 8.0 lj/cut 1.2
+kspace_style    ewald 1.0e-4
+
+pair_coeff      1   1   buck/coul/long  0.0 0.2 0.0 #SI-SI
+pair_coeff      2   2   buck/coul/long  32026.68173 0.362318841 4035.698637 #SI-SI
+pair_coeff      1   2   buck/coul/long  415187.07650 0.205204815 3079.540161 #SI-O
+pair_coeff      1   1   lj/cut  0.0 0.0 #Si-Si
+pair_coeff      2   2   lj/cut  59.95595939 1.6 1.6 #O-O 
+pair_coeff      1   2   lj/cut  46.11996875 1.2 1.2 #Si-O
+
+set             type 1 charge 2.4  # Si charge
+set             type 2 charge -1.2 # O charge
+
+neighbor        2.0 bin
+neigh_modify    every 2 delay 0 check yes
+group mobile    type 1 2
+timestep        0.5
+run_style       verlet
+
+thermo_modify   lost warn
+thermo_style    custom step temp press time vol density etotal lx ly lz
+thermo          10
+
+dump            xyz  mobile xyz 1 dump.xyz
+dump_modify     xyz  element Si O
+
+minimize        1.0e-4  1.0e-6  1000  10000
+velocity        mobile create 1.0 {} dist gaussian
+fix             1 mobile nve
+fix             2 mobile temp/berendsen 1.0 298 100
+run             5000
+
+fix             3 mobile deform 
+                    
+write_data      final_struc.data""".format(np.random.randint(0, 10000)))
     @staticmethod        
     def _run():
         command = ['lmp', '-in', "instruction.in"]
