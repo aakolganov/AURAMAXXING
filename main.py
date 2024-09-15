@@ -24,13 +24,13 @@ class distribution_intervals(dict):
 
 d_min_max: Dict[str, Dict[str, List]] = {
     "Si": {
-        "Si": [2.4, 2.8],
+        "Si": [2.4, 2.6],
         "O": [1.5850717394267364, 1.92]
         },
     
     "O": {
         "Si": [1.5850717394267364, 1.92],
-        "O": [2.15, 2.4]
+        "O": [2.15, 2.3]
     }
 }
 
@@ -130,7 +130,7 @@ def place_atom(atom_type, cl, current_atoms, current_xyz, idx_connect_to = None)
     
     else:
         made_placement = False
-        MAX_ITER, current_iter = 50, 0
+        MAX_ITER, current_iter = 125, 0
         while current_iter <= MAX_ITER and not made_placement:
             current_iter += 1
 
@@ -176,7 +176,7 @@ def set_i(current_atoms, current_xyz, cl) -> int:
             for n, atom in enumerate(current_atoms):
                 if atom == "Si":
                     cn = get_cn(n, current_xyz, cl)
-                    if cn < wanted_CN[current_atoms[n]]:
+                    if cn < wanted_CN[atom]:
                         if cn not in possible_choices:
                             possible_choices[cn] = []
                         possible_choices[cn].append(n)
@@ -185,7 +185,7 @@ def set_i(current_atoms, current_xyz, cl) -> int:
             for n, atom in enumerate(current_atoms):
                 if atom == "O":
                     cn = get_cn(n, current_xyz, cl)
-                    if cn < wanted_CN[current_atoms[n]]:
+                    if cn < wanted_CN[atom]:
                         if cn not in possible_choices:
                             possible_choices[cn] = []
                         possible_choices[cn].append(n)
@@ -197,7 +197,7 @@ def set_i(current_atoms, current_xyz, cl) -> int:
         if np.all(current_xyz[i, 2] - np.mean(current_xyz[i, 2]) == 0):
             weighting = np.empty(len(current_atoms)).fill(1/len(current_atoms))
         else:
-            exp_factor = 1.5**(-(np.abs(current_xyz[i, 2] - np.mean(current_xyz[i, 2]))**2))
+            exp_factor = np.exp(-(np.abs(current_xyz[i, 2] - np.mean(current_xyz[i, 2]))**2))
             weighting = (exp_factor)/sum(exp_factor)
         return np.random.choice(np.array(i, dtype=int), p=weighting)
 
@@ -298,6 +298,8 @@ def main():
     
     number_write = 0
     TOTAL_DESIRED_ATOM, new_total_atoms = 105*3, 0
+    first_opt = True
+    final_attempt = 0
     while new_total_atoms < TOTAL_DESIRED_ATOM:
         i = set_i(atoms, xyz_coords, cl)
         if i is None:
@@ -316,7 +318,7 @@ def main():
             atoms, xyz_coords, made_placement = place_atom(atom_to_add, cl, atoms, xyz_coords)
 
         else:
-            MAX_ITER, current_iter = 50, 0
+            MAX_ITER, current_iter = 100, 0
             made_placement = False
             while current_iter <= MAX_ITER and not made_placement:
                 atoms, xyz_coords, made_placement = place_atom(atom_to_add, cl, atoms, xyz_coords, i)
@@ -346,21 +348,35 @@ def main():
                               ylo = dims["ylo"], yhi = dims["yhi"],
                               zlo = dims["zlo"], zhi = dims["zhi"])
             
-            
             print(f"stuck anneal")
-            atoms, xyz_coords, dims = opt_tool.opt_struc("final", steps=250, removal="everything")
+            if first_opt:
+                max_steps = 5000
+                first_opt = False
+            else:
+                max_steps = 500
+                
+            atoms, xyz_coords, dims = opt_tool.opt_struc("anneal", steps=max_steps, start_T=1000, final_T=2000, 
+                                                         removal="over-coord")
 
             number_write += 1
             write_xyz(f"strucutre_{number_write}", atoms, xyz_coords)
         
         new_total_atoms = len(atoms)
         if new_total_atoms == TOTAL_DESIRED_ATOM:
+            final_attempt += 1
             opt_tool = Lammps_interface()
             opt_tool.add_structure(atoms, xyz_coords)
             opt_tool.add_dims(xlo = dims["xlo"], xhi = dims["xhi"],
                               ylo = dims["ylo"], yhi = dims["yhi"],
                               zlo = dims["zlo"], zhi = dims["zhi"])
-            atoms, xyz_coords, dims = opt_tool.opt_struc("final", steps=1000, removal="rings")
+            
+            if final_attempt % 10 == 0:
+                atoms, xyz_coords, dims = opt_tool.opt_struc("final", steps=2500, start_T=298, final_T=1000,                                   
+                                                              removal="over-coord")
+            else:
+                atoms, xyz_coords, dims = opt_tool.opt_struc("final", steps=2500, start_T=298, final_T=1000, 
+                                                              removal="rings", max_num_rings=2)
+            
             new_total_atoms = len(atoms)
     
     number_write += 1

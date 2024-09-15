@@ -37,7 +37,7 @@ class Lammps_interface:
                     f.write(f" {i}")
                 f.write("\n")
 
-    def opt_struc(self, type_opt = "minimize", steps = None, removal = None):
+    def opt_struc(self, type_opt = "minimize", steps = None, removal = None, max_num_rings=None, start_T=None, final_T=None):
         """type opt wither 'minimize' or 'anneal' or 'final'. If 'anneal' or 'final' need to specify the number of steps
         removals: None removes nothing, rings removes 2MR, over-coord removes only over-coordianted atoms, 
         everything removes over-coordianted and rings 
@@ -55,10 +55,10 @@ class Lammps_interface:
                 self._write_in_file_minimize()
             case 'anneal':
                 assert steps is not None, "Need to specify number of steps"
-                self._write_in_file_anneal(steps)
+                self._write_in_file_anneal(steps, start_T, final_T)
             case 'final':
                 assert steps is not None, "Need to specify number of steps"
-                self._write_in_file_anneal(2*steps)
+                self._write_in_file_anneal(steps, start_T, final_T)
             case _:
                 raise ValueError
         
@@ -68,43 +68,28 @@ class Lammps_interface:
 
         match removal:
             case "rings":
-                self.remove_2MR(4)
+                self.remove_2MR(max_num_rings)
                 self.write_xyz("yeet_2MR")
             case "over-coord":
                 self.remove_over_coord({"Si": 4, "O": 2}, 2.0)
                 self.write_xyz("yeet_over")
             case "everything":
-                self.remove_2MR(3)
-                self.write_xyz("yeet_2MR")
                 self.remove_over_coord({"Si": 4, "O": 2}, 2.0)
                 self.write_xyz("yeet_over")
+                self.remove_2MR(max_num_rings)
+                self.write_xyz("yeet_2MR")
             case None:
                 pass
             case _:
                 raise ValueError
 
-        # if type_opt == "final":
-        #     self._write_data_file()
-        #     self._write_in_file_anneal(steps)
-        #     self._run()
-        #     self._read_final_struc_data()
         os.chdir("..")
-
         return self.atoms, self.xyz_coords, self.dims
-    
-    def compact_box(self):
-        try:
-            os.mkdir("LAMMPS")
-        except:
-            ...
-        os.chdir("LAMMPS")
-        
-        self._write_data_file()
     
     def add_structure(self, atoms, xyz_coords):
         self.atoms = np.array(atoms, dtype=str)
         self.xyz_coords = np.array(xyz_coords, dtype=float)
-
+        
     def add_dims(self, xlo: float = None, xhi: float = None, ylo: float = None, yhi: float = None, zlo: float = None, zhi: float = None):
        args = locals()
        for key, val in args.items():
@@ -162,7 +147,7 @@ class Lammps_interface:
 
     def _write_in_file_minimize(self):
         with open("instruction.in", "w") as f:
-            f.write("""units           real
+            f.write(f"""units           real
 atom_style      charge
 boundary        p p p
 
@@ -198,9 +183,9 @@ minimize        0  5.0e-1  1000  1000000
 
 write_data      final_struc.data""")
             
-    def _write_in_file_anneal(self, steps: int):
+    def _write_in_file_anneal(self, steps: int, start_T, final_T):
         with open("instruction.in", "w") as f:
-            f.write("""units           real
+            f.write(f"""units           real
 atom_style      charge
 boundary        p p p
 
@@ -229,20 +214,20 @@ thermo_modify   lost warn
 thermo_style    custom step temp press time vol density etotal lx ly lz
 thermo          10
 
-dump            xyz  mobile xyz 1 dump.xyz
+dump            xyz  mobile xyz {steps//50} dump.xyz
 dump_modify     xyz  element Si O
 
 minimize        1.0e-2  1.0e-3  1000  10000
-velocity        mobile create 298 {} dist gaussian
+velocity        mobile create {start_T} {np.random.randint(10000)} dist gaussian
 fix             1 mobile nve
 #fix             3 mobile press/berendsen z 1.0 1.0 100 modulus 360000
-fix             4 mobile temp/berendsen 298 298 100
-run             {}
+fix             4 mobile temp/berendsen {start_T} {start_T} 100
+run             {4*int(steps)}
                     
-fix             4 mobile temp/berendsen 298 700 100
-run             {} 
+fix             4 mobile temp/berendsen {start_T} {final_T} 100
+run             {int(steps)} 
  
-write_data      final_struc.data""".format(np.random.randint(10000), 4*int(steps), int(steps)))
+write_data      final_struc.data""")
     
     
     @staticmethod        
