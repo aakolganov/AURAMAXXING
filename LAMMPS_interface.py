@@ -3,7 +3,7 @@ import numba as nb
 import os
 import subprocess
 from typing import Dict
-from itertools import combinations
+import itertools
 
 class Lammps_interface:
     def __init__(self):
@@ -37,8 +37,10 @@ class Lammps_interface:
                     f.write(f" {i}")
                 f.write("\n")
 
-    def opt_struc(self, type_opt = "minimize", steps = None):
-        """type opt wither 'minimize' or 'anneal'. If 'anneal' need to specify the number of steps
+    def opt_struc(self, type_opt = "minimize", steps = None, removal = None):
+        """type opt wither 'minimize' or 'anneal' or 'final'. If 'anneal' or 'final' need to specify the number of steps
+        removals: None removes nothing, rings removes 2MR, over-coord removes only over-coordianted atoms, 
+        everything removes over-coordianted and rings 
         """
         try:
             os.mkdir("LAMMPS")
@@ -48,39 +50,44 @@ class Lammps_interface:
         
         self._write_data_file()
 
-        MAX_ITER, current_iter = 10, 0
-        done = False
-        current_best_fragemnt = []
-        while current_iter <= MAX_ITER and not done:
-            current_iter += 1
-            match type_opt:
-                case 'minimize':
-                    self._write_in_file_minimize()
-                case 'anneal':
-                    assert steps is not None, "Need to specify number of steps"
-                    self._write_in_file_anneal(steps)
-            
-            self._run()
-            self._read_final_struc_data()
-            done = True
-            # fragments = self.determine_fragments()
-            # largest_fragment = max(fragments, key=len)
-            # if len(largest_fragment) == len(self.atoms):
-                # done = True
-            # else:
-                # if len(largest_fragment) >= len(current_best_fragemnt):
-                    # current_best_fragment = largest_fragment
-                # done = True
-            
-
-        # if not done:
-        #     self.atoms = self.atoms[current_best_fragment]
-        #     self.xyz_coords = self.xyz_coords[current_best_fragment]
+        match type_opt:
+            case 'minimize':
+                self._write_in_file_minimize()
+            case 'anneal':
+                assert steps is not None, "Need to specify number of steps"
+                self._write_in_file_anneal(steps)
+            case 'final':
+                assert steps is not None, "Need to specify number of steps"
+                self._write_in_file_anneal(2*steps)
+            case _:
+                raise ValueError
+        
+        self._run()
+        self._read_final_struc_data()
         self.write_xyz("final_struc_convert")
-        self.remove_over_coord({"Si": 4, "O": 2}, 2.0)
-        self.write_xyz("yeet_over")
-        self.remove_2MR()
-        self.write_xyz("yeet_2MR")
+
+        match removal:
+            case "rings":
+                self.remove_2MR(4)
+                self.write_xyz("yeet_2MR")
+            case "over-coord":
+                self.remove_over_coord({"Si": 4, "O": 2}, 2.0)
+                self.write_xyz("yeet_over")
+            case "everything":
+                self.remove_2MR(3)
+                self.write_xyz("yeet_2MR")
+                self.remove_over_coord({"Si": 4, "O": 2}, 2.0)
+                self.write_xyz("yeet_over")
+            case None:
+                pass
+            case _:
+                raise ValueError
+
+        # if type_opt == "final":
+        #     self._write_data_file()
+        #     self._write_in_file_anneal(steps)
+        #     self._run()
+        #     self._read_final_struc_data()
         os.chdir("..")
 
         return self.atoms, self.xyz_coords, self.dims
@@ -187,7 +194,7 @@ thermo          10
 dump            xyz  mobile xyz 1 dump.xyz
 dump_modify     xyz  element Si O
 
-minimize        1.0e-3  1.0e-5  1000  10000
+minimize        0  5.0e-1  1000  1000000
 
 write_data      final_struc.data""")
             
@@ -225,61 +232,19 @@ thermo          10
 dump            xyz  mobile xyz 1 dump.xyz
 dump_modify     xyz  element Si O
 
-minimize        1.0e-4  1.0e-6  1000  10000
-velocity        mobile create 1.0 {} dist gaussian
+minimize        1.0e-2  1.0e-3  1000  10000
+velocity        mobile create 298 {} dist gaussian
 fix             1 mobile nve
 #fix             3 mobile press/berendsen z 1.0 1.0 100 modulus 360000
-fix             4 mobile temp/berendsen 1.0 1000 100
+fix             4 mobile temp/berendsen 298 298 100
 run             {}
                     
-fix             4 mobile temp/berendsen 1000 1.0 100
+fix             4 mobile temp/berendsen 298 700 100
 run             {} 
-                    
-write_data      final_struc.data""".format(np.random.randint(0, 10000), int(steps), int(steps)))
+ 
+write_data      final_struc.data""".format(np.random.randint(10000), 4*int(steps), int(steps)))
     
-    def _write_in_file_compact(self, steps: int):
-        with open("instruction.in", "w") as f:
-            f.write("""units           real
-atom_style      charge
-boundary        p p p
-
-read_data       structure.data
-
-pair_style      hybrid/overlay buck/coul/long 5.5 8.0 lj/cut 1.2
-kspace_style    ewald 1.0e-4
-
-pair_coeff      1   1   buck/coul/long  0.0 0.2 0.0 #SI-SI
-pair_coeff      2   2   buck/coul/long  32026.68173 0.362318841 4035.698637 #SI-SI
-pair_coeff      1   2   buck/coul/long  415187.07650 0.205204815 3079.540161 #SI-O
-pair_coeff      1   1   lj/cut  0.0 0.0 #Si-Si
-pair_coeff      2   2   lj/cut  59.95595939 1.6 1.6 #O-O 
-pair_coeff      1   2   lj/cut  46.11996875 1.2 1.2 #Si-O
-
-set             type 1 charge 2.4  # Si charge
-set             type 2 charge -1.2 # O charge
-
-neighbor        2.0 bin
-neigh_modify    every 2 delay 0 check yes
-group mobile    type 1 2
-timestep        0.5
-run_style       verlet
-
-thermo_modify   lost warn
-thermo_style    custom step temp press time vol density etotal lx ly lz
-thermo          10
-
-dump            xyz  mobile xyz 1 dump.xyz
-dump_modify     xyz  element Si O
-
-minimize        1.0e-4  1.0e-6  1000  10000
-velocity        mobile create 1.0 {} dist gaussian
-fix             1 mobile nve
-fix             2 mobile temp/berendsen 1.0 298 100
-run             5000
-
-fix             3 mobile deform 
-                    
-write_data      final_struc.data""".format(np.random.randint(0, 10000)))
+    
     @staticmethod        
     def _run():
         command = ['lmp', '-in', "instruction.in"]
@@ -377,20 +342,27 @@ write_data      final_struc.data""".format(np.random.randint(0, 10000)))
         paths = _find_2MR(self.atoms, self.xyz_coords, self.cl, tolerance)
         return paths
     
-    def remove_2MR(self):
+    def remove_2MR(self, max_allowed):
         to_delete = []
 
         idx_2MRs = self.find_2MR(2.0)
-        for idx_2MR in idx_2MRs:
-            possible_delete = []
-            for idx in idx_2MR:
-                if self.atoms[idx] == "O":
-                    possible_delete.append(idx)
-            to_delete.append(np.random.choice(idx_2MR))
+        number_2MR = len(idx_2MRs)
+        print(f"{number_2MR=}")
+        if number_2MR > max_allowed:
+            combinations = list(itertools.combinations(idx_2MRs, number_2MR-max_allowed))
+            chosen_combination = combinations[0]
+            for idx_2MR in chosen_combination:
+                possible_delete = []
+                for idx in idx_2MR:
+                    if self.atoms[idx] == "O":
+                        possible_delete.append(idx)
+                to_delete.append(np.random.choice(possible_delete))
         
-        to_delete = np.unique(to_delete)
-        self.atoms = np.delete(self.atoms, np.array(to_delete, dtype=int))
-        self.xyz_coords = np.delete(self.xyz_coords, np.array(to_delete, dtype=int), axis=0)
+            to_delete = np.unique(to_delete)
+            self.atoms = np.delete(self.atoms, np.array(to_delete, dtype=int))
+            self.xyz_coords = np.delete(self.xyz_coords, np.array(to_delete, dtype=int), axis=0)
+        else:
+            pass
 
     def remove_over_coord(self, wanted_CN, tolerance):
         num_coords = len(self.xyz_coords)
@@ -411,7 +383,7 @@ write_data      final_struc.data""".format(np.random.randint(0, 10000)))
         self.atoms = np.delete(self.atoms, np.array(to_delete, dtype=int))
         self.xyz_coords = np.delete(self.xyz_coords, np.array(to_delete, dtype=int), axis=0)
 
-# @nb.njit
+@nb.njit
 def mic(xyz_atom1, xyz_atoms2, cl, num_coords: int):
     output_array = np.empty((num_coords, 3))
     for i in range(num_coords):

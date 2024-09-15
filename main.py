@@ -2,6 +2,7 @@ import numpy as np
 import numba as nb
 import time
 from LAMMPS_interface import Lammps_interface
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 
 from typing import Dict, List, Callable
 from scipy.stats import burr12, norm, uniform
@@ -23,13 +24,13 @@ class distribution_intervals(dict):
 
 d_min_max: Dict[str, Dict[str, List]] = {
     "Si": {
-        "Si": [2.6182204094224216, 2.9639004221169623],
+        "Si": [2.4, 2.8],
         "O": [1.5850717394267364, 1.92]
         },
     
     "O": {
         "Si": [1.5850717394267364, 1.92],
-        "O": [2.150711959298154, 2.4]
+        "O": [2.15, 2.4]
     }
 }
 
@@ -42,18 +43,6 @@ class random_sample(dict):
         if hasattr(random_distribution, "rvs"):
             return random_distribution.rvs()
         return random_distribution
-
-# sample_dist: Dict[str, random_sample[str, Callable]] = {
-#     "Si": random_sample({
-#         "Si": burr12(c=20.50918422948114, d=3.282331385061921, loc=1.8153399428512698, scale=1.3978541397862818),
-#         "O": norm(loc=1.613346742833259, scale=0.014426287232598306)
-#         }),
-    
-#     "O": random_sample({
-#         "Si": norm(loc=1.613346742833259, scale=0.014426287232598306),
-#         "O": burr12(c=68.50536301711077, d=0.4299182937422296, loc=-0.2260984913136991, scale=2.788587313802839)
-#     })
-# }  
 
 sample_dist: Dict[str, random_sample[str, Callable]] = {
     "Si": random_sample({
@@ -96,7 +85,6 @@ def mic(xyz_atom1, xyz_atoms2, cl, num_coords: int):
 
     return output_array
 
-
 def get_cn(idx_atom, current_xyz_coords, cl):
     mic_coords = mic(current_xyz_coords[idx_atom], current_xyz_coords, nb.typed.List(cl), len(current_xyz_coords))
     dists = np.linalg.norm(mic_coords, axis=1)
@@ -128,39 +116,10 @@ def wrap_struc(current_xyz, cl):
     return current_xyz % cl
 
 def choose_vector(current_atoms, current_xyz_coords, atom_type, idx_connect_to, limits: List = None):
-    current_z = current_xyz_coords[:, 2]
-    current_mean = np.mean(current_z)
-    current_var = np.var(current_z)
-    current_wf = np.exp(-current_var)
-    current_len = len(current_xyz_coords)
-
-    choosing = True
-    while choosing:
-        dist = sample_dist[current_atoms[idx_connect_to]][atom_type]
-        random_direction = np.random.randn(3)
-        # random_direction = np.append(random_direction, np.random.normal(loc=0, scale=0.5))
-        unit_vector = random_direction/np.linalg.norm(random_direction)
-        new_coords = current_xyz_coords[idx_connect_to] + unit_vector * dist
-
-        # new_z = new_coords[2]
-        # mean_new = (current_len*current_mean + new_z)/(current_len+1)
-        # new_var = (current_len*(current_var + (current_mean - mean_new)**2) + (new_z - mean_new)**2)/(current_len+1)
-        # new_wf = np.exp(-new_var)
-
-        # if limits is None:
-        #     prefactor = 1
-        # else:
-        #     if new_z >= current_mean - limits[0] and new_z <= current_mean + limits[1]:
-        #         prefactor = 1
-        #     else:
-        #         prefactor = 0.5
-        
-        # rand_num = np.random.random(1)
-        # if prefactor*new_wf/(current_wf + new_wf) >= rand_num:
-        # if new_coords[2] >= current_mean - limits[0] and new_coords[2] <= current_mean + limits[1]:
-        choosing = False
-        # else:
-        #     choosing = np.random.choice([False, True], p=[0.25, 0.75])
+    dist = sample_dist[current_atoms[idx_connect_to]][atom_type]
+    random_direction = np.random.randn(3)
+    unit_vector = random_direction/np.linalg.norm(random_direction)
+    new_coords = current_xyz_coords[idx_connect_to] + unit_vector * dist
     return new_coords
 
 
@@ -171,29 +130,31 @@ def place_atom(atom_type, cl, current_atoms, current_xyz, idx_connect_to = None)
     
     else:
         made_placement = False
-        MAX_ITER, current_iter = 25, 0
+        MAX_ITER, current_iter = 50, 0
         while current_iter <= MAX_ITER and not made_placement:
             current_iter += 1
 
             new_coords = choose_vector(current_atoms, current_xyz, atom_type, idx_connect_to, limits=[5,5])
             if len(current_atoms) >= 2:
-                for k in range(len(current_atoms)): ### maybe splits this work becuase I have a feeling that this is that is taking a while
-                    past_d_min = beyond_d_min(atom_type, new_coords, current_atoms, current_xyz, cl, k)
-                    past_d_max = beyond_d_max(atom_type, new_coords, current_atoms, current_xyz, cl, k)
-                    
-                    if past_d_min and not past_d_max:    
-                        if current_atoms[k] != atom_type:
-                            made_placement = True
-                        else:
-                            made_placement = False
-                            break
-
-                    elif past_d_max:
-                        made_placement = True
-                    else:
-                        # Too close and completely reject placement
-                        made_placement = False
-                        break
+                if len(current_atoms) <= 999:
+                    check_idx = np.arange(len(current_atoms))[np.abs(new_coords[2] - current_xyz[:, 2]) <= 2.8]
+                    made_placement = worker_job(
+                        check_idx[::-1],
+                        atom_type = atom_type,
+                        new_coords = new_coords,
+                        current_atoms = current_atoms,
+                        current_xyz = current_xyz,
+                        cl = cl
+                        )
+                else:
+                    made_placement = concurrent_worker_process_k(
+                        np.arange(len(current_atoms))[::-1],
+                        atom_type = atom_type,
+                        new_coords = new_coords,
+                        current_atoms = current_atoms,
+                        current_xyz = current_xyz,
+                        cl = list(cl)
+                        )
             else:
                 made_placement = True
             
@@ -205,32 +166,119 @@ def place_atom(atom_type, cl, current_atoms, current_xyz, idx_connect_to = None)
         return current_atoms, current_xyz, made_placement
 
 def set_i(current_atoms, current_xyz, cl) -> int:
-    current_number_Si = len(np.where(current_atoms == "Si")[0])
-    current_number_O = len(np.where(current_atoms == "O")[0])
-    # print(current_number_Si, current_number_O)
-    i = []
-    if len(current_atoms) == 0:
-        return 0
-    elif 2*current_number_Si > current_number_O:
-        for n, atom in enumerate(current_atoms):
-            if atom == "Si":
-                cn = get_cn(n, current_xyz, cl)
-                if cn != wanted_CN[current_atoms[n]]:
-                    i.append(n)    
-           
-    else:
-        for n, atom in enumerate(current_atoms):
-            if atom == "O":
-                cn = get_cn(n, current_xyz, cl)
-                if cn != wanted_CN[current_atoms[n]]:
-                    i.append(n)
-    if np.all(current_xyz[i, 2] - np.mean(current_xyz[i, 2]) == 0):
-        weighting = np.empty(len(current_atoms)).fill(1/len(current_atoms))
-    else:
-        exp_factor = np.exp(-(np.abs(current_xyz[i, 2] - np.mean(current_xyz[i, 2]))))
-        weighting = (exp_factor)/sum(exp_factor)
-    return np.random.choice(np.array(i, dtype=int), p=weighting)
+    possible_choices = {}
+    # i = []
+    if len(current_atoms) != 0:
+        current_number_Si = len(np.where(current_atoms == "Si")[0])
+        current_number_O = len(np.where(current_atoms == "O")[0])
 
+        if 2*current_number_Si > current_number_O:
+            for n, atom in enumerate(current_atoms):
+                if atom == "Si":
+                    cn = get_cn(n, current_xyz, cl)
+                    if cn < wanted_CN[current_atoms[n]]:
+                        if cn not in possible_choices:
+                            possible_choices[cn] = []
+                        possible_choices[cn].append(n)
+                        # i.append(n)
+        else:
+            for n, atom in enumerate(current_atoms):
+                if atom == "O":
+                    cn = get_cn(n, current_xyz, cl)
+                    if cn < wanted_CN[current_atoms[n]]:
+                        if cn not in possible_choices:
+                            possible_choices[cn] = []
+                        possible_choices[cn].append(n)
+                        # i.append(n)
+        keys = np.array([key for key in possible_choices.keys()])
+        chosen_key = np.random.choice(keys, p=((keys+1)/np.sum(keys+1)))
+        i = possible_choices[chosen_key]
+        
+        if np.all(current_xyz[i, 2] - np.mean(current_xyz[i, 2]) == 0):
+            weighting = np.empty(len(current_atoms)).fill(1/len(current_atoms))
+        else:
+            exp_factor = 1.5**(-(np.abs(current_xyz[i, 2] - np.mean(current_xyz[i, 2]))**2))
+            weighting = (exp_factor)/sum(exp_factor)
+        return np.random.choice(np.array(i, dtype=int), p=weighting)
+
+    else:
+        return 0
+
+def chunk_data(data, num_chunks):
+    data = list(data)
+    total_items = len(data)
+    base_chunk_size = total_items // num_chunks
+    remainder = total_items % num_chunks
+    
+    start = 0
+    for i in range(num_chunks):
+        # Calculate the size of the current chunk
+        end = start + base_chunk_size + (1 if i < remainder else 0)
+        yield data[start:end]
+        start = end
+
+def chunk_data_round_robin(data, num_chunks):
+    # Initialize the chunks as empty lists
+    chunks = [[] for _ in range(num_chunks)]
+
+    # Distribute data elements into chunks in a round-robin fashion
+    for i, item in enumerate(data):
+        chunks[i % num_chunks].append(item)
+    
+    return chunks
+
+def worker_job(idx_chunk, atom_type, new_coords, current_atoms, current_xyz, cl):
+    made_placement = 0
+    for k in idx_chunk: ### maybe splits this work becuase I have a feeling that this is that is taking a while
+        past_d_min = beyond_d_min(atom_type, new_coords, current_atoms, current_xyz, cl, k)
+        past_d_max = beyond_d_max(atom_type, new_coords, current_atoms, current_xyz, cl, k)
+        
+        if past_d_min and not past_d_max:    
+            if current_atoms[k] != atom_type:
+                made_placement = True
+            else:
+                made_placement = False
+                break
+
+        elif past_d_max:
+            made_placement = True
+        else:
+            # Too close and completely reject placement
+            made_placement = False
+            break
+    
+    return made_placement
+
+def concurrent_worker_process_k(idx_all, **kwargs):
+    """ kwargs must be: atom_type, new_coords, current_atoms, current_xyz, cl"""
+    atom_type = kwargs["atom_type"] 
+    new_coords = kwargs["new_coords"]
+    current_atoms = kwargs["current_atoms"] 
+    current_xyz = kwargs["current_xyz"]
+    cl = kwargs["cl"]
+
+    expected_number_workers = 4 
+    actual_number_workers = np.min([expected_number_workers, len(idx_all)])
+    chunked_idx = chunk_data_round_robin(idx_all, actual_number_workers)
+    with ProcessPoolExecutor(max_workers=actual_number_workers) as executor:
+        futures = {executor.submit(
+            worker_job, chunk, atom_type, new_coords, current_atoms, current_xyz, cl): 
+            (chunk, atom_type, new_coords, current_atoms, current_xyz, cl) for chunk in chunked_idx}
+        
+        all_results = []
+        for future in as_completed(futures):
+            job_results = future.result()
+            if job_results is False:
+                for remaining_job in futures:
+                    if not remaining_job.done():
+                        remaining_job.cancel()
+                return False
+            try:
+                all_results.append(future.result())
+            except Exception as e:
+                print(f"Error processing {job_results}: {e}", flush=True)
+    
+    return True
 
 def main():
     atoms = np.empty(0)
@@ -248,9 +296,9 @@ def main():
           dims["zhi"] - dims["zlo"]]
     cl = nb.typed.List(cl)
     
-    times_stuck = 0
-    TOTAL_DESIRED_ATOM, new_total_atoms = 432, 0
-    while new_total_atoms <= TOTAL_DESIRED_ATOM:
+    number_write = 0
+    TOTAL_DESIRED_ATOM, new_total_atoms = 105*3, 0
+    while new_total_atoms < TOTAL_DESIRED_ATOM:
         i = set_i(atoms, xyz_coords, cl)
         if i is None:
             idx_remove = np.random.randint(0, len(atoms))
@@ -275,39 +323,51 @@ def main():
                 current_iter += 1
                 i = set_i(atoms, xyz_coords, cl)
 
-            if len(atoms) % 500 == 0:
+            if len(atoms) % 999 == 0:
                 opt_tool = Lammps_interface()
                 opt_tool.add_structure(atoms, xyz_coords)
                 opt_tool.add_dims(xlo = dims["xlo"], xhi = dims["xhi"],
                                   ylo = dims["ylo"], yhi = dims["yhi"],
                                   zlo = dims["zlo"], zhi = dims["zhi"])
-                atoms, xyz_coords, dims = opt_tool.opt_struc()
+                atoms, xyz_coords, dims = opt_tool.opt_struc(removal="over-coord")
+        
+        new_total_atoms = len(atoms)
         if made_placement:
             xyz_coords = wrap_struc(xyz_coords, cl)
-            write_xyz(f"number_{new_total_atoms}", atoms, xyz_coords)
             print(f"{new_total_atoms}", flush=True)
+            
+            number_write += 1
+            write_xyz(f"strucutre_{number_write}", atoms, xyz_coords)
         
         else:
-            print(f"stuck opt")
             opt_tool = Lammps_interface()
             opt_tool.add_structure(atoms, xyz_coords)
             opt_tool.add_dims(xlo = dims["xlo"], xhi = dims["xhi"],
                               ylo = dims["ylo"], yhi = dims["yhi"],
                               zlo = dims["zlo"], zhi = dims["zhi"])
             
-            if times_stuck == 5:
-                print(f"stuck opt")
-                atoms, xyz_coords, dims = opt_tool.opt_struc("anneal", steps=250)
-                times_stuck = 0
-            else:
-                print("stuck_anneal")
-                atoms, xyz_coords, dims = opt_tool.opt_struc()
-                times_stuck += 1
             
-        new_total_atoms = len(atoms)
-        if new_total_atoms == 200:
-            ...
+            print(f"stuck anneal")
+            atoms, xyz_coords, dims = opt_tool.opt_struc("final", steps=250, removal="everything")
 
+            number_write += 1
+            write_xyz(f"strucutre_{number_write}", atoms, xyz_coords)
+        
+        new_total_atoms = len(atoms)
+        if new_total_atoms == TOTAL_DESIRED_ATOM:
+            opt_tool = Lammps_interface()
+            opt_tool.add_structure(atoms, xyz_coords)
+            opt_tool.add_dims(xlo = dims["xlo"], xhi = dims["xhi"],
+                              ylo = dims["ylo"], yhi = dims["yhi"],
+                              zlo = dims["zlo"], zhi = dims["zhi"])
+            atoms, xyz_coords, dims = opt_tool.opt_struc("final", steps=1000, removal="rings")
+            new_total_atoms = len(atoms)
+    
+    number_write += 1
+    write_xyz(f"strucutre_{number_write}", atoms, xyz_coords)
+    write_xyz(f"final_strucutre", atoms, xyz_coords)
 
 if __name__ == "__main__":
+    start_time = time.time()
     main()
+    print(time.time() - start_time)
