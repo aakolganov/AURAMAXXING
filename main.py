@@ -85,6 +85,21 @@ def mic(xyz_atom1, xyz_atoms2, cl, num_coords: int):
 
     return output_array
 
+def make_Fourier_function(Lx, Ly, steps, alpha, n_max, m_max):
+    x = np.linspace(0, Lx, steps)
+    y = np.linspace(0, Ly, steps)
+    mesh_x, mesh_y = np.meshgrid(x, y)
+    Fourier_Series = np.zeros((steps, steps))
+
+    for n in range(1, n_max + 1):
+        for m in range(1, m_max + 1):
+            # determine the standard deviation for the normal distribution and sample it
+            std = 1 / np.sqrt(alpha * (m ** 2 + n ** 2))
+            # add the given mode to the Fourier series
+            b = np.random.normal(loc=0, scale=std, size=1)
+            Fourier_Series = Fourier_Series + b * np.sin((m * np.pi * mesh_x) / Lx) * np.sin((n * np.pi * mesh_y) / Ly)
+    return Fourier_Series
+
 def get_cn(idx_atom, current_xyz_coords, cl):
     mic_coords = mic(current_xyz_coords[idx_atom], current_xyz_coords, nb.typed.List(cl), len(current_xyz_coords))
     dists = np.linalg.norm(mic_coords, axis=1)
@@ -115,15 +130,52 @@ def beyond_d_min(new_atom, new_coords, current_atoms, current_xyz, cl, idx_atom_
 def wrap_struc(current_xyz, cl):
     return current_xyz % cl
 
+def find_nearest(value, array):
+    value = np.array(value)
+    return np.abs(array-value).argmin()
+
 def choose_vector(current_atoms, current_xyz_coords, atom_type, idx_connect_to, limits: List = None):
     dist = sample_dist[current_atoms[idx_connect_to]][atom_type]
     random_direction = np.random.randn(3)
     unit_vector = random_direction/np.linalg.norm(random_direction)
     new_coords = current_xyz_coords[idx_connect_to] + unit_vector * dist
-    return new_coords
+    if limits is None:
+       pass
+    else:
+        choosing_vector = True
+        MAX_ITER, current_iter = 1000, 0 
+        while choosing_vector and current_iter < MAX_ITER:
+            current_iter += 1
+            x, y, z = new_coords
+            idx_x, idx_y = find_nearest(x, limits[0]), find_nearest(y, limits[1])
+            lower_bound = current_xyz_coords[0,2] - limits[2][idx_x, idx_y] 
+            upper_bound = current_xyz_coords[0,2] + limits[3][idx_x, idx_y] 
+
+            if z >= lower_bound and z <= upper_bound: 
+                choosing_vector = False
+            else:
+                if z <= lower_bound:
+                    factor = np.exp(-(z-lower_bound)**2)
+                else:
+                    factor = np.exp(-(upper_bound-z)**2)
+
+                rng = np.random.rand(1)[0]
+                factor_weight = factor/(1+factor)
+                if factor_weight <= rng:
+                    dist = sample_dist[current_atoms[idx_connect_to]][atom_type]
+                    random_direction = np.random.randn(3)
+                    unit_vector = random_direction/np.linalg.norm(random_direction)
+                    new_coords = current_xyz_coords[idx_connect_to] + unit_vector * dist
+                else:
+                    choosing_vector = False
+
+    if current_iter == MAX_ITER:
+        return None
+    else:
+        return new_coords
 
 
-def place_atom(atom_type, cl, current_atoms, current_xyz, idx_connect_to = None):
+def place_atom(atom_type, cl, current_atoms, current_xyz, idx_connect_to = None, limits=None):
     if idx_connect_to is None: # implies that there are no other atoms here
         new_coords = np.array([cl[0]/2, cl[1]/2, cl[2]/2])
         made_placement = True
@@ -134,7 +186,10 @@ def place_atom(atom_type, cl, current_atoms, current_xyz, idx_connect_to = None)
         while current_iter <= MAX_ITER and not made_placement:
             current_iter += 1
 
-            new_coords = choose_vector(current_atoms, current_xyz, atom_type, idx_connect_to, limits=[5,5])
+            new_coords = choose_vector(current_atoms, current_xyz, atom_type, idx_connect_to, limits=limits)
+            if new_coords is None:
+                continue
+
             if len(current_atoms) >= 2:
                 if len(current_atoms) <= 999:
                     check_idx = np.arange(len(current_atoms))[np.abs(new_coords[2] - current_xyz[:, 2]) <= 2.8]
@@ -295,7 +350,14 @@ def main():
           dims["yhi"] - dims["ylo"],
           dims["zhi"] - dims["zlo"]]
     cl = nb.typed.List(cl)
-    
+     
+    x_vals, y_vals = np.linspace(dims["xlo"], dims["xhi"], 500), np.linspace(dims["ylo"], dims["yhi"], 500)
+    lower_limit = np.full((500, 500), 2.5) 
+    # upper_limit = np.load("test_fourier_mesh.npy")
+    upper_limit = make_Fourier_function(cl[0], cl[1], 500, 0.02, 6, 6)
+    upper_limit[upper_limit < 0] = 0
+    limits = [x_vals, y_vals, lower_limit, upper_limit]
+
     number_write = 0
     TOTAL_DESIRED_ATOM, new_total_atoms = 105*3, 0
     first_opt = True
@@ -321,7 +383,7 @@ def main():
             MAX_ITER, current_iter = 100, 0
             made_placement = False
             while current_iter <= MAX_ITER and not made_placement:
-                atoms, xyz_coords, made_placement = place_atom(atom_to_add, cl, atoms, xyz_coords, i)
+                atoms, xyz_coords, made_placement = place_atom(atom_to_add, cl, atoms, xyz_coords, i, limits=limits)
                 current_iter += 1
                 i = set_i(atoms, xyz_coords, cl)
 
@@ -375,7 +437,7 @@ def main():
                                                               removal="over-coord")
             else:
                 atoms, xyz_coords, dims = opt_tool.opt_struc("final", steps=2500, start_T=298, final_T=1000, 
-                                                              removal="rings", max_num_rings=2)
+                                                              removal="everything", max_num_rings=2)
             
             new_total_atoms = len(atoms)
     
@@ -384,6 +446,4 @@ def main():
     write_xyz(f"final_strucutre", atoms, xyz_coords)
 
 if __name__ == "__main__":
-    start_time = time.time()
     main()
-    print(time.time() - start_time)

@@ -168,7 +168,8 @@ set             type 2 charge -1.2 # O charge
 
 neighbor        2.0 bin
 neigh_modify    every 2 delay 0 check yes
-group mobile    type 1 2
+group           frozen id 1
+group           mobile id > 2
 timestep        0.5
 run_style       verlet
 
@@ -176,7 +177,7 @@ thermo_modify   lost warn
 thermo_style    custom step temp press time vol density etotal lx ly lz
 thermo          10
 
-dump            xyz  mobile xyz 1 dump.xyz
+dump            xyz  all xyz 1 dump.xyz
 dump_modify     xyz  element Si O
 
 minimize        0  5.0e-1  1000  1000000
@@ -206,7 +207,8 @@ set             type 2 charge -1.2 # O charge
 
 neighbor        2.0 bin
 neigh_modify    every 2 delay 0 check yes
-group mobile    type 1 2
+group           frozen id 1   
+group           mobile id > 2
 timestep        0.5
 run_style       verlet
 
@@ -214,12 +216,13 @@ thermo_modify   lost warn
 thermo_style    custom step temp press time vol density etotal lx ly lz
 thermo          10
 
-dump            xyz  mobile xyz {steps//50} dump.xyz
+dump            xyz  all xyz {steps//50} dump.xyz
 dump_modify     xyz  element Si O
 
-minimize        1.0e-2  1.0e-3  1000  10000
 velocity        mobile create {start_T} {np.random.randint(10000)} dist gaussian
-fix             1 mobile nve
+fix             1 frozen move linear 0 0 0
+
+fix             2 mobile nve
 #fix             3 mobile press/berendsen z 1.0 1.0 100 modulus 360000
 fix             4 mobile temp/berendsen {start_T} {start_T} 100
 run             {4*int(steps)}
@@ -251,6 +254,7 @@ write_data      final_struc.data""")
     def _read_final_struc_data(self):
         atoms = np.empty(0)
         xyz_coords = np.array([]).reshape((0, 3))
+        numbering = np.empty(0, dtype=int)
 
         with open("final_struc.data") as f:
             lines = f.readlines()
@@ -279,12 +283,13 @@ write_data      final_struc.data""")
                 if len(line) != 0:
                     atoms = np.append(atoms, std_dict[line[1]])
                     xyz_coords = np.vstack((xyz_coords, np.array([line[3], line[4], line[5]], dtype=float)))
+                    numbering = np.append(numbering, line[0])
 
             if "Atoms # charge" in line:
                 reading_file = True
-            
-        self.atoms = atoms
-        self.xyz_coords = xyz_coords
+        ordered_array = np.argsort(numbering)    
+        self.atoms = atoms[ordered_array]
+        self.xyz_coords = xyz_coords[ordered_array]
 
     def determine_fragments(self):
         num_coords = len(self.xyz_coords)
@@ -342,8 +347,10 @@ write_data      final_struc.data""")
                     if self.atoms[idx] == "O":
                         possible_delete.append(idx)
                 to_delete.append(np.random.choice(possible_delete))
-        
+
             to_delete = np.unique(to_delete)
+            if 0 in to_delete:
+                to_delete = np.delete(to_delete, np.where(to_delete == 0)) 
             self.atoms = np.delete(self.atoms, np.array(to_delete, dtype=int))
             self.xyz_coords = np.delete(self.xyz_coords, np.array(to_delete, dtype=int), axis=0)
         else:
@@ -363,8 +370,10 @@ write_data      final_struc.data""")
         for i, val in enumerate(CN):
             if val > wanted_CN[self.atoms[i]]:
                 to_delete.append(i)
-        
+         
         to_delete = np.unique(to_delete)
+        if 0 in to_delete:
+            to_delete = np.delete(to_delete, np.where(to_delete == 0))
         self.atoms = np.delete(self.atoms, np.array(to_delete, dtype=int))
         self.xyz_coords = np.delete(self.xyz_coords, np.array(to_delete, dtype=int), axis=0)
 
