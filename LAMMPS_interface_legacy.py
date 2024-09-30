@@ -5,14 +5,19 @@ import subprocess
 from typing import Dict
 import itertools
 
-from crystal_class import CrystalStruc
-
 class Lammps_interface:
     num_final = 1
-    def __init__(self, struc: CrystalStruc):
-        self.atoms = struc.atoms
-        self.xyz_coords = struc.xyz
-        self.dims: Dict[str, float|None] = struc.dims
+    def __init__(self):
+        self.atoms = None
+        self.xyz_coords = None
+        self.dims: Dict[str, float|None] = {
+            "xlo": None, 
+            "xhi": None, 
+            "ylo": None, 
+            "yhi": None, 
+            "zlo": None, 
+            "zhi": None
+        }
 
         self.atom_masses: Dict[str, float] = {
             "Si": 28.085,
@@ -22,9 +27,7 @@ class Lammps_interface:
             "Si": 2.4,
             "O": -1.2
         }
-
-        self.properies: Dict[str, float] = {}
-
+    
     def write_xyz(self, file_name):
         assert len(self.atoms) == len(self.xyz_coords)
         with open("{}.xyz".format(file_name), "w") as f:
@@ -57,8 +60,6 @@ class Lammps_interface:
                 self._run()
                 self._read_final_struc_data()
                 self.write_xyz("opted_struc")
-                self.properies["pe"] = float(self.get_pot())
-
             case 'anneal':
                 assert steps is not None, "Need to specify number of steps"
                 self._write_in_file_anneal(steps, start_T, final_T, FF=FF)
@@ -117,11 +118,6 @@ class Lammps_interface:
     
     def add_atom_charge(self, atom_type, charge: int|float):
         self.atom_charges[atom_type] = charge
-
-    def get_pot(self) -> str:
-        with open("final_pe.txt", "r") as f:
-            lines = f.readlines()
-        return lines[0].strip().split()[0]
 
     def _write_data_file(self):
         atom_numbering: Dict[str, int] = {"Si": 1, "O":2}
@@ -212,14 +208,11 @@ thermo_modify   lost warn
 thermo_style    custom step temp press time vol density etotal lx ly lz
 thermo          10
 
-variable        pe equal pe
 dump            xyz  all xyz 1 dump.xyz
 dump_modify     xyz  element Si O
 
 minimize        0  5.0e-1  1000  1000000
 
-compute         myPE all pe
-print           "${pe}" file final_pe.txt      
 write_data      final_struc.data""")
             
     def _write_in_file_anneal(self, steps: int, start_T, final_T, FF):
@@ -493,19 +486,14 @@ write_data      final_struc.data""")
     def remove_over_coord(self, wanted_CN, tolerance, max_remove_over):
         total_num_atoms = len(self.atoms)
         checked_atoms = 0
-        removed = 0
-        iter = 0
-        while checked_atoms < total_num_atoms and removed != max_remove_over and iter < 10000:
+        while checked_atoms < total_num_atoms:
             idx_check = int(total_num_atoms-checked_atoms - 1)
             if self.get_cn(idx_check, tolerance) > wanted_CN[self.atoms[idx_check]]:
-                if self.atoms[idx_check] == "Si":
-                    self.atoms = np.delete(self.atoms, idx_check)
-                    self.xyz_coords = np.delete(self.xyz_coords, idx_check, axis=0)
-                    total_num_atoms -= 1
-                    removed += 1
+                self.atoms = np.delete(self.atoms, idx_check)
+                self.xyz_coords = np.delete(self.xyz_coords, idx_check, axis=0)
+                total_num_atoms -= 1
             else:
                 checked_atoms += 1
-            iter += 1
         # num_coords = len(self.xyz_coords)
         # dist_matrix = np.empty((num_coords, num_coords))
         # for i, xyz in enumerate(self.xyz_coords):
