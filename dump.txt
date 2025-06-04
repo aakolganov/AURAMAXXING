@@ -1,0 +1,1425 @@
+#here are some old pieces of code
+
+"""
+def place_atom_random(
+        self,
+        atom_type: str,
+        idx_connect_to: Optional[int] = None,
+        limits: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = None,
+        max_iter: int = 25
+) -> bool:
+    """
+"""
+    Place a new atom of `atom_type` either at the center of the box
+    (if idx_connect_to is None) or bonded to atom `idx_connect_to`,
+    respecting optional vertical `limits`.
+
+    Returns True if placement succeeded, False otherwise.
+    """
+"""
+    # 1) center‐of‐cell placement when no anchor
+    if idx_connect_to is None:
+        # fractional [0.5,0.5,0.5] → Cartesian
+        frac = np.array([0.5, 0.5, 0.5])
+        new_coords = frac @ self.atoms.get_cell()
+        made_placement = True
+    else:
+        made_placement = False
+        # 2) propose a position (internally retries up to max_iter)
+        new_coords = self.choose_vector(atom_type,
+                                        idx_connect_to,
+                                        limits=limits,
+                                        max_iter=max_iter)
+        if new_coords is None:
+            return False
+
+        # 3) optional extra overlap‐check
+        if len(self.atoms) >= 2:
+            positions = self.atoms.get_positions()
+            # only check neighbors within ±2.8 Å in z
+            close_idxs = np.where(np.abs(new_coords[2] - positions[:, 2]) <= 2.8)[0][::-1]
+            made_placement = self.check_placement(
+                close_idxs,
+                atom_type=atom_type,
+                new_coords=new_coords
+            )
+        else:
+            made_placement = True
+
+    # 4) commit to ASE Atoms if OK
+    if made_placement:
+        # append a new Atom to the ASE Atoms object
+        self.atoms.append(Atom(atom_type, position=new_coords))
+        self.update_atoms(self.atoms)
+        return True
+
+    return False
+
+"""
+
+
+def beyond_d_max(self,
+                 new_atom_type: str,
+                 new_coords: np.ndarray,
+                 idx_atom: int
+                 ) -> bool:
+    """
+    Return True if `new_coords` is at least d_max from atom idx_atom,
+    using PBC (minimum‐image) distance.
+    """
+    idx = int(idx_atom)
+    old_sym = self.atoms[idx].symbol
+    d_max = d_min_max[old_sym][new_atom_type][1]
+
+    pos_ref = self.atoms.get_positions()[idx]
+    dist = self._pbc_dist(pos_ref, new_coords)
+    return dist >= d_max
+
+
+def beyond_d_min(self,
+                 new_atom_type: str,
+                 new_coords: np.ndarray,
+                 idx_atom: int
+                 ) -> bool:
+    """
+    Return True if `new_coords` is at least d_min from atom idx_atom,
+    using PBC (minimum‐image) distance.
+    """
+    idx = int(idx_atom)
+    old_sym = self.atoms[idx].symbol
+    d_min = d_min_max[old_sym][new_atom_type][0]
+
+    pos_ref = self.atoms.get_positions()[idx]
+    dist = self._pbc_dist(pos_ref, new_coords)
+    return dist >= d_min
+
+
+    def check_placement_old(self, idx_chunk: List[int], atom_type: str, new_coords: np.ndarray) -> bool:
+        """
+        Checks whether the chosen placement for an atom is considered valid.
+
+        --- input ---
+        idx_chunk - the list of indicies that must be checked for if that atom can be placed where it will be placed
+        atom_type - the atom that wants to be placed
+        new_coords - the xyz coordinates of where the atom will be placed
+
+        --- output ---
+        made_placement - boolean value signifying if the placement is considered valid
+        """
+
+
+        made_placement = 0
+        for k in idx_chunk:  ### maybe splits this work becuase I have a feeling that this is that is taking a while
+            past_d_min = self.beyond_d_min(atom_type, new_coords, k)
+            past_d_max = self.beyond_d_max(atom_type, new_coords, k)
+
+            if past_d_min and not past_d_max:
+                if self.atoms[k].symbol != atom_type:
+                    made_placement = True
+                else:
+                    made_placement = False
+                    break
+            elif past_d_max:
+                made_placement = True
+            else:
+                # Too close and completely reject placement
+                made_placement = False
+                break
+
+        return made_placement
+
+
+   def place_atom_random(
+            self,
+            atom_type: str,
+            idx_anchor: Optional[int] = None,
+            limits: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = None,
+            max_iter: int = 25
+    ) -> bool:
+        """
+        Place a new atom of `atom_type` either at the center of the box
+        (if idx_connect_to is None) or bonded to atom `idx_connect_to`,
+        respecting optional vertical `limits`.
+
+        Returns True if placement succeeded, False otherwise.
+        """
+        # 1) center‐of‐cell placement when no anchor
+        if idx_anchor is None:
+            # fractional [0.5,0.5,0.5] → Cartesian
+            new_coords =  0.5 * np.ones(3) @ self.atoms.get_cell()
+            made_placement = True
+        else:
+            made_placement = False
+            # 2) propose a position (internally retries up to max_iter)
+            new_coords = self.choose_vector(atom_type,
+                                            idx_anchor,
+                                            limits=limits,
+                                            max_iter=max_iter)
+            if new_coords is None:
+                return False
+
+            # 3) optional extra overlap‐check
+            if len(self.atoms) >= 2:
+                positions = self.atoms.get_positions()
+                # only check neighbors within ±2.8 Å in z
+                z_check = 2.8
+                close_idxs = np.where(np.abs(new_coords[2] - positions[:, 2]) <= z_check)[0][::-1]
+                made_placement = self.check_placement(
+                    close_idxs,
+                    new_atom_type=atom_type,
+                    new_coords=new_coords
+                )
+            else:
+                made_placement = True
+
+        # 4) commit to ASE Atoms if OK
+        if made_placement:
+            # append a new Atom to the ASE Atoms object
+            self.atoms.append(Atom(atom_type, position=new_coords))
+            self.update_atoms(self.atoms)
+            return True
+
+        return False
+
+
+   def slice(self, raise_by: float = 0) -> None:
+        """
+        Remove all atoms whose z‐coordinate exceeds the local upper bound,
+        then optionally raise that bound everywhere by `raise_by`.
+
+        Parameters
+        ----------
+        raise_by : float
+            Amount to increment the upper‐limit grid (self.limits[3]) by,
+            after slicing out the high‐z atoms. Default is 0 (no change).
+
+        Effects
+        -------
+        - Writes the structure before slicing to "before_slice.xyz".
+        - Deletes any atom i for which
+              z_i > z_min + self.limits[3][ix,iy] + 1
+          where (ix,iy) = find_nearest(x_i, self.limits[0]), find_nearest(y_i, self.limits[1])
+          and z_min = min_j z_j.
+        - Writes the structure after slicing to "after_slice.xyz".
+        - Increments self.limits[3] (the “upper” grid) by `raise_by`.
+        """
+
+        self.atoms.write("before_slice.xyz", format="xyz")
+
+        positions = self.atoms.get_positions()  # (N,3) array
+        z_min = positions[:, 2].min()
+
+        to_delete: List[int] = []
+        for idx, (x, y, z) in enumerate(positions):
+            ix = find_nearest(x, self.limits[0])
+            iy = find_nearest(y, self.limits[1])
+            z_bound = z_min + self.limits[3][ix, iy] + 1.0
+            if z > z_bound:
+                to_delete.append(idx)
+
+        # 2) delete in descending order so indices stay valid
+        for idx in sorted(to_delete, reverse=True):
+            del self.atoms[idx]
+        self.update_atoms(self.atoms)
+        print (f"Sliced out {len(to_delete)} atoms")
+
+        # 3) snapshot after slicing
+        self.atoms.write("after_slice.xyz", format = "xyz")
+
+        # 4) raise the upper‐limit grid if requested
+        if raise_by:
+            # self.limits[3] is a 2D array of upper‐bounds
+            self.limits[3] = self.limits[3] + raise_by
+
+
+    def _write_data_file(self):
+        atom_numbering: Dict[str, int] = {"Si": 1, "O":2}
+        for atom in self.atoms:
+            assert atom.symbol in self.atom_masses, f"atom {atom.symbol} not known in masses"
+            assert atom.symbol in self.atom_charges, f"atom {atom.symbol} not known in charges"
+        self.cl = [self.atoms.get_pbc()[0],
+                   self.atoms.get_pbc()[1],
+                   self.atoms.get_pbc()[2]]
+        with open("structure.data", "w") as f:
+            # Header
+            f.write("Generated through interface; ")
+            for atom_type, atom_number in atom_numbering.items():
+                f.write(f"{atom_type} is {atom_number}  ")
+            f.write("\n\n")
+
+            # Atoms count and types
+            f.write("{:d} atoms\n{:d} atom types\n\n".format(len(self.atoms), len(atom_numbering.keys())))
+
+            # PBC boundaries
+            for pbcs in self.atoms.get_pbc():
+                assert pbcs is not None, "No PBCs!"
+            f.write("{} {} xlo xhi\n{} {} ylo yhi\n{} {} zlo zhi\n\n".format(
+                0,
+                self.atoms.get_cell()[0][0],
+                0,
+                self.atoms.get_cell()[1][1],
+                0,
+                self.atoms.get_cell()[2][2],
+            ))
+
+            # Masses
+            f.write("Masses\n\n")
+            for atom_type, atom_number in atom_numbering.items():
+                f.write(f"{atom_number} {self.atom_masses[atom_type]}\n")
+            f.write("\n")
+
+            # Atoms positions and charges
+            f.write("Atoms # charge\n\n")
+            for i, (atom, xyz) in enumerate(zip(self.atoms, self.xyz_coords)):
+                f.write(f"{i+1} {atom_numbering[atom.symbol]} {self.atom_charges[atom.symbol]} {xyz[0]} {xyz[1]} {xyz[2]} 0 0 0\n")
+            f.write("\n")
+
+            # Velocities
+            f.write("Velocities\n\n")
+            for i, _ in enumerate(self.atoms):
+                f.write(f"{i+1} 0 0 0\n")
+
+
+def _write_in_file_minimize(self, FF):
+    with open("instruction.in", "w") as f:
+        f.write(f"""units           real
+atom_style      charge
+boundary        p p p
+
+read_data       structure.data
+
+""")
+        match FF:
+            case "BKS":
+                f.write("""pair_style      hybrid/overlay buck/coul/long 5.5 8.0 lj/cut 1.2
+kspace_style    ewald 1.0e-4
+
+pair_coeff      1   1   buck/coul/long  0.0 0.2 0.0 #SI-SI
+pair_coeff      2   2   buck/coul/long  32026.68173 0.362318841 4035.698637 #SI-SI
+pair_coeff      1   2   buck/coul/long  415187.07650 0.205204815 3079.540161 #SI-O
+pair_coeff      1   1   lj/cut  0.0 0.0 #Si-Si
+pair_coeff      2   2   lj/cut  59.95595939 1.6 1.6 #O-O 
+pair_coeff      1   2   lj/cut  46.11996875 1.2 1.2 #Si-O
+
+set             type 1 charge 2.4  # Si charge
+set             type 2 charge -1.2 # O charge
+
+""")
+
+            case "ReaxFF":
+                f.write("""pair_style reaxff NULL safezone 3.0 mincap 150
+pair_coeff * * ../ffield_Yeon Si O
+fix myqeq all qeq/reaxff 1 0.0 10.0 1.0e-6 reaxff maxiter 4000
+
+""")
+
+            case _:
+                raise ValueError
+
+        f.write("""neighbor        2.0 bin
+neigh_modify    every 2 delay 0 check yes
+group           frozen id 1
+group           mobile id > 1
+timestep        0.5
+run_style       verlet
+
+thermo_modify   lost warn
+thermo_style    custom step temp press time vol density etotal lx ly lz
+thermo          10
+
+variable        pe equal pe
+dump            xyz  all xyz 1 dump.xyz
+dump_modify     xyz  element Si O
+
+minimize        0  5.0e-1  1000  1000000
+
+compute         myPE all pe
+print           "${pe}" file final_pe.txt      
+write_data      final_struc.data""")
+
+
+def _write_in_file_anneal(self, steps: int, start_T, final_T, FF):
+    with open("instruction.in", "w") as f:
+        f.write(f"""units           real
+atom_style      charge
+boundary        p p p
+
+read_data       structure.data
+
+""")
+        match FF:
+            case "BKS":
+                f.write("""pair_style      hybrid/overlay buck/coul/long 5.5 8.0 lj/cut 1.2
+kspace_style    ewald 1.0e-4
+
+pair_coeff      1   1   buck/coul/long  0.0 0.2 0.0 #SI-SI
+pair_coeff      2   2   buck/coul/long  32026.68173 0.362318841 4035.698637 #SI-SI
+pair_coeff      1   2   buck/coul/long  415187.07650 0.205204815 3079.540161 #SI-O
+pair_coeff      1   1   lj/cut  0.0 0.0 #Si-Si
+pair_coeff      2   2   lj/cut  59.95595939 1.6 1.6 #O-O 
+pair_coeff      1   2   lj/cut  46.11996875 1.2 1.2 #Si-O
+
+set             type 1 charge 2.4  # Si charge
+set             type 2 charge -1.2 # O charge
+
+""")
+
+            case "ReaxFF":
+                f.write("""pair_style reaxff NULL safezone 3.0 mincap 150
+pair_coeff * * ../ffield_Yeon Si O
+fix myqeq all qeq/reaxff 1 0.0 10.0 1.0e-6 reaxff maxiter 4000
+
+""")
+
+            case _:
+                raise ValueError
+
+        f.write(f"""neighbor        2.0 bin
+neigh_modify    every 2 delay 0 check yes
+group           frozen id 1   
+group           mobile id > 1
+timestep        0.5
+run_style       verlet
+
+thermo_modify   lost warn
+thermo_style    custom step temp press time vol density etotal lx ly lz
+thermo          10
+
+dump            xyz  all xyz {steps // 50} dump.xyz
+dump_modify     xyz  element Si O
+
+velocity        mobile create {start_T} {np.random.randint(10000)} dist gaussian
+fix             1 frozen move linear 0 0 0
+
+fix             2 mobile nve
+#fix             3 mobile press/berendsen z 1.0 1.0 100 modulus 360000
+fix             4 mobile temp/berendsen {start_T} {start_T} 100
+run             {4 * int(steps)}
+
+fix             4 mobile temp/berendsen {start_T} {final_T} 50
+run             {int(steps)} 
+
+write_data      final_struc.data""")
+
+
+def _write_in_file_anneal_with_min(self, steps: int, start_T, final_T, FF):
+    with open("instruction.in", "w") as f:
+        f.write(f"""units           real
+atom_style      charge
+boundary        p p p
+
+read_data       structure.data
+
+""")
+        match FF:
+            case "BKS":
+                f.write("""pair_style      hybrid/overlay buck/coul/long 5.5 8.0 lj/cut 1.2
+kspace_style    ewald 1.0e-4
+
+pair_coeff      1   1   buck/coul/long  0.0 0.2 0.0 #SI-SI
+pair_coeff      2   2   buck/coul/long  32026.68173 0.362318841 4035.698637 #SI-SI
+pair_coeff      1   2   buck/coul/long  415187.07650 0.205204815 3079.540161 #SI-O
+pair_coeff      1   1   lj/cut  0.0 0.0 #Si-Si
+pair_coeff      2   2   lj/cut  59.95595939 1.6 1.6 #O-O 
+pair_coeff      1   2   lj/cut  46.11996875 1.2 1.2 #Si-O
+
+set             type 1 charge 2.4  # Si charge
+set             type 2 charge -1.2 # O charge
+
+""")
+
+            case "ReaxFF":
+                f.write("""pair_style reaxff NULL safezone 3.0 mincap 150
+pair_coeff * * ../ffield_Yeon Si O
+fix myqeq all qeq/reaxff 1 0.0 10.0 1.0e-6 reaxff maxiter 4000
+
+""")
+
+            case _:
+                raise ValueError
+
+        f.write(f"""neighbor        2.0 bin
+neigh_modify    every 2 delay 0 check yes
+group           frozen id 1   
+group           mobile id > 1
+timestep        0.5
+run_style       verlet
+
+thermo_modify   lost warn
+thermo_style    custom step temp press time vol density etotal lx ly lz
+thermo          10
+
+dump            xyz  all xyz {steps // 50} dump.xyz
+dump_modify     xyz  element Si O
+
+velocity        mobile create {start_T} {np.random.randint(10000)} dist gaussian
+fix             1 frozen move linear 0 0 0
+minimize        0  5.0e-1  1000  1000000
+
+fix             2 mobile nve
+#fix             3 mobile press/berendsen z 1.0 1.0 100 modulus 360000
+fix             4 mobile temp/berendsen {start_T} {start_T} 100
+run             {4 * int(steps)}
+
+fix             4 mobile temp/berendsen {start_T} {final_T} 100
+run             {int(steps)} 
+
+write_data      final_struc.data""")
+
+
+    @staticmethod
+    def _run():
+        command = ['/Users/akolganov/.local/bin/lmp', '-in', "instruction.in"]
+        with open("lmp.out", "w") as outfile:
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            for stdout_line in iter(process.stdout.readline, ''):
+                outfile.write(stdout_line)
+                outfile.flush()  # Ensure output is written immediately
+
+            for stderr_line in iter(process.stderr.readline, ''):
+                outfile.write(stderr_line)
+                outfile.flush()  # Ensure error output is written immediately
+
+            # Wait for the process to complete
+            process.stdout.close()
+            process.stderr.close()
+            process.wait()
+
+    def _read_final_struc_data(self):
+        current_dir = os.getcwd()
+        if not os.path.basename(current_dir) == "LAMMPS":
+            os.chdir("LAMMPS")
+        try:
+            self.atoms = read("final_struc.data", format="lammps-data")
+        finally:
+            if not os.path.basename(current_dir) == "LAMMPS":
+                os.chdir(current_dir)
+
+
+import numpy as np
+import subprocess
+from typing import Dict
+from ase.io import read
+
+from AmorphousStrucASE import AmorphousStrucASE
+
+
+class Lammps_interface:
+    num_final = 1
+
+    def __init__(self, struc: AmorphousStrucASE):
+        self.atoms = struc.atoms
+
+        self.atom_masses: Dict[str, float] = {
+            "Si": 28.085,
+            "O": 15.9999
+        }
+        self.atom_charges: Dict[str, float] = {
+            "Si": 2.4,
+            "O": -1.2
+        }
+
+        self.properties: Dict[str, float] = {}
+
+    @property
+    def xyz_coords(self):
+        return self.atoms.positions
+
+    def opt_struc(self, type_opt="minimize", steps=None, removal=None, max_num_rings=None, start_T=None, final_T=None,
+                  max_remove_over=None, FF=None):
+        """type opt wither 'minimize' or 'anneal' or 'final'. If 'anneal' or 'final' need to specify the number of steps
+        removals: None removes nothing, rings removes 2MR, over-coord removes only over-coordianted atoms,
+        everything removes over-coordianted and rings
+        """
+        try:
+            os.mkdir("LAMMPS")
+        except:
+            ...
+        os.chdir("LAMMPS")
+
+        self._write_data_file()
+
+        if FF is None:
+            FF = "BKS"
+
+        match type_opt:
+            case 'minimize':
+                self._write_in_file_minimize(FF=FF)
+                self._run()
+                self._read_final_struc_data()
+                self.atoms.write("opted_struc.xyz", format='xyz')
+                self.properties["pe"] = float(self.get_pot())
+
+            case 'anneal':
+                assert steps is not None, "Need to specify number of steps"
+                self._write_in_file_anneal(steps, start_T, final_T, FF=FF)
+                self._run()
+                self._read_final_struc_data()
+                self.atoms.write("opted_struc.xyz", format='xyz')
+            case 'anneal_with_min':
+                assert steps is not None, "Need to specify number of steps"
+                self._write_in_file_anneal_with_min(steps, start_T, final_T, FF=FF)
+                self._run()
+                self._read_final_struc_data()
+                self.atoms.write("opted_struc.xyz", format='xyz')
+            case 'final':
+                Lammps_interface.num_final += 1
+                assert steps is not None, "Need to specify number of steps"
+                self._write_in_file_anneal(steps, start_T, final_T, FF=FF)
+                self._run()
+                self._read_final_struc_data()
+                self.atoms.write(f"final_struc_convert_{Lammps_interface.num_final}.xyz", format='xyz')
+            case _:
+                raise ValueError
+
+        os.chdir("..")
+        return self.atoms
+
+    def get_pot(self) -> str:
+        with open("final_pe.txt", "r") as f:
+            lines = f.readlines()
+        return lines[0].strip().split()[0]
+
+    def _write_data_file(self):
+        atom_numbering: Dict[str, int] = {"Si": 1, "O": 2}
+        for atom in self.atoms:
+            assert atom.symbol in self.atom_masses, f"atom {atom.symbol} not known in masses"
+            assert atom.symbol in self.atom_charges, f"atom {atom.symbol} not known in charges"
+        self.cl = [self.atoms.get_pbc()[0],
+                   self.atoms.get_pbc()[1],
+                   self.atoms.get_pbc()[2]]
+        with open("structure.data", "w") as f:
+            # Header
+            f.write("Generated through interface; ")
+            for atom_type, atom_number in atom_numbering.items():
+                f.write(f"{atom_type} is {atom_number}  ")
+            f.write("\n\n")
+
+            # Atoms count and types
+            f.write("{:d} atoms\n{:d} atom types\n\n".format(len(self.atoms), len(atom_numbering.keys())))
+
+            # PBC boundaries
+            for pbcs in self.atoms.get_pbc():
+                assert pbcs is not None, "No PBCs!"
+            f.write("{} {} xlo xhi\n{} {} ylo yhi\n{} {} zlo zhi\n\n".format(
+                0,
+                self.atoms.get_cell()[0][0],
+                0,
+                self.atoms.get_cell()[1][1],
+                0,
+                self.atoms.get_cell()[2][2],
+            ))
+
+            # Masses
+            f.write("Masses\n\n")
+            for atom_type, atom_number in atom_numbering.items():
+                f.write(f"{atom_number} {self.atom_masses[atom_type]}\n")
+            f.write("\n")
+
+            # Atoms positions and charges
+            f.write("Atoms # charge\n\n")
+            for i, (atom, xyz) in enumerate(zip(self.atoms, self.xyz_coords)):
+                f.write(
+                    f"{i + 1} {atom_numbering[atom.symbol]} {self.atom_charges[atom.symbol]} {xyz[0]} {xyz[1]} {xyz[2]} 0 0 0\n")
+            f.write("\n")
+
+            # Velocities
+            f.write("Velocities\n\n")
+            for i, _ in enumerate(self.atoms):
+                f.write(f"{i + 1} 0 0 0\n")
+
+    def _write_in_file_minimize(self, FF):
+        with open("instruction.in", "w") as f:
+            f.write(f"""units           real
+atom_style      charge
+boundary        p p p
+
+read_data       structure.data
+
+""")
+            match FF:
+                case "BKS":
+                    f.write("""pair_style      hybrid/overlay buck/coul/long 5.5 8.0 lj/cut 1.2
+kspace_style    ewald 1.0e-4
+
+pair_coeff      1   1   buck/coul/long  0.0 0.2 0.0 #SI-SI
+pair_coeff      2   2   buck/coul/long  32026.68173 0.362318841 4035.698637 #SI-SI
+pair_coeff      1   2   buck/coul/long  415187.07650 0.205204815 3079.540161 #SI-O
+pair_coeff      1   1   lj/cut  0.0 0.0 #Si-Si
+pair_coeff      2   2   lj/cut  59.95595939 1.6 1.6 #O-O 
+pair_coeff      1   2   lj/cut  46.11996875 1.2 1.2 #Si-O
+
+set             type 1 charge 2.4  # Si charge
+set             type 2 charge -1.2 # O charge
+
+""")
+
+                case "ReaxFF":
+                    f.write("""pair_style reaxff NULL safezone 3.0 mincap 150
+pair_coeff * * ../ffield_Yeon Si O
+fix myqeq all qeq/reaxff 1 0.0 10.0 1.0e-6 reaxff maxiter 4000
+
+""")
+
+                case _:
+                    raise ValueError
+
+            f.write("""neighbor        2.0 bin
+neigh_modify    every 2 delay 0 check yes
+group           frozen id 1
+group           mobile id > 1
+timestep        0.5
+run_style       verlet
+
+thermo_modify   lost warn
+thermo_style    custom step temp press time vol density etotal lx ly lz
+thermo          10
+
+variable        pe equal pe
+dump            xyz  all xyz 1 dump.xyz
+dump_modify     xyz  element Si O
+
+minimize        0  5.0e-1  1000  1000000
+
+compute         myPE all pe
+print           "${pe}" file final_pe.txt      
+write_data      final_struc.data""")
+
+    def _write_in_file_anneal(self, steps: int, start_T, final_T, FF):
+        with open("instruction.in", "w") as f:
+            f.write(f"""units           real
+atom_style      charge
+boundary        p p p
+
+read_data       structure.data
+
+""")
+            match FF:
+                case "BKS":
+                    f.write("""pair_style      hybrid/overlay buck/coul/long 5.5 8.0 lj/cut 1.2
+kspace_style    ewald 1.0e-4
+
+pair_coeff      1   1   buck/coul/long  0.0 0.2 0.0 #SI-SI
+pair_coeff      2   2   buck/coul/long  32026.68173 0.362318841 4035.698637 #SI-SI
+pair_coeff      1   2   buck/coul/long  415187.07650 0.205204815 3079.540161 #SI-O
+pair_coeff      1   1   lj/cut  0.0 0.0 #Si-Si
+pair_coeff      2   2   lj/cut  59.95595939 1.6 1.6 #O-O 
+pair_coeff      1   2   lj/cut  46.11996875 1.2 1.2 #Si-O
+
+set             type 1 charge 2.4  # Si charge
+set             type 2 charge -1.2 # O charge
+
+""")
+
+                case "ReaxFF":
+                    f.write("""pair_style reaxff NULL safezone 3.0 mincap 150
+pair_coeff * * ../ffield_Yeon Si O
+fix myqeq all qeq/reaxff 1 0.0 10.0 1.0e-6 reaxff maxiter 4000
+
+""")
+
+                case _:
+                    raise ValueError
+
+            f.write(f"""neighbor        2.0 bin
+neigh_modify    every 2 delay 0 check yes
+group           frozen id 1   
+group           mobile id > 1
+timestep        0.5
+run_style       verlet
+
+thermo_modify   lost warn
+thermo_style    custom step temp press time vol density etotal lx ly lz
+thermo          10
+
+dump            xyz  all xyz {steps // 50} dump.xyz
+dump_modify     xyz  element Si O
+
+velocity        mobile create {start_T} {np.random.randint(10000)} dist gaussian
+fix             1 frozen move linear 0 0 0
+
+fix             2 mobile nve
+#fix             3 mobile press/berendsen z 1.0 1.0 100 modulus 360000
+fix             4 mobile temp/berendsen {start_T} {start_T} 100
+run             {4 * int(steps)}
+
+fix             4 mobile temp/berendsen {start_T} {final_T} 50
+run             {int(steps)} 
+
+write_data      final_struc.data""")
+
+    def _write_in_file_anneal_with_min(self, steps: int, start_T, final_T, FF):
+        with open("instruction.in", "w") as f:
+            f.write(f"""units           real
+atom_style      charge
+boundary        p p p
+
+read_data       structure.data
+
+""")
+            match FF:
+                case "BKS":
+                    f.write("""pair_style      hybrid/overlay buck/coul/long 5.5 8.0 lj/cut 1.2
+kspace_style    ewald 1.0e-4
+
+pair_coeff      1   1   buck/coul/long  0.0 0.2 0.0 #SI-SI
+pair_coeff      2   2   buck/coul/long  32026.68173 0.362318841 4035.698637 #SI-SI
+pair_coeff      1   2   buck/coul/long  415187.07650 0.205204815 3079.540161 #SI-O
+pair_coeff      1   1   lj/cut  0.0 0.0 #Si-Si
+pair_coeff      2   2   lj/cut  59.95595939 1.6 1.6 #O-O 
+pair_coeff      1   2   lj/cut  46.11996875 1.2 1.2 #Si-O
+
+set             type 1 charge 2.4  # Si charge
+set             type 2 charge -1.2 # O charge
+
+""")
+
+                case "ReaxFF":
+                    f.write("""pair_style reaxff NULL safezone 3.0 mincap 150
+pair_coeff * * ../ffield_Yeon Si O
+fix myqeq all qeq/reaxff 1 0.0 10.0 1.0e-6 reaxff maxiter 4000
+
+""")
+
+                case _:
+                    raise ValueError
+
+            f.write(f"""neighbor        2.0 bin
+neigh_modify    every 2 delay 0 check yes
+group           frozen id 1   
+group           mobile id > 1
+timestep        0.5
+run_style       verlet
+
+thermo_modify   lost warn
+thermo_style    custom step temp press time vol density etotal lx ly lz
+thermo          10
+
+dump            xyz  all xyz {steps // 50} dump.xyz
+dump_modify     xyz  element Si O
+
+velocity        mobile create {start_T} {np.random.randint(10000)} dist gaussian
+fix             1 frozen move linear 0 0 0
+minimize        0  5.0e-1  1000  1000000
+
+fix             2 mobile nve
+#fix             3 mobile press/berendsen z 1.0 1.0 100 modulus 360000
+fix             4 mobile temp/berendsen {start_T} {start_T} 100
+run             {4 * int(steps)}
+
+fix             4 mobile temp/berendsen {start_T} {final_T} 100
+run             {int(steps)} 
+
+write_data      final_struc.data""")
+
+    @staticmethod
+    def _run():
+        command = ['/Users/akolganov/.local/bin/lmp', '-in', "instruction.in"]
+        with open("lmp.out", "w") as outfile:
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            for stdout_line in iter(process.stdout.readline, ''):
+                outfile.write(stdout_line)
+                outfile.flush()  # Ensure output is written immediately
+
+            for stderr_line in iter(process.stderr.readline, ''):
+                outfile.write(stderr_line)
+                outfile.flush()  # Ensure error output is written immediately
+
+            # Wait for the process to complete
+            process.stdout.close()
+            process.stderr.close()
+            process.wait()
+
+    def _read_final_struc_data(self):
+        current_dir = os.getcwd()
+        if not os.path.basename(current_dir) == "LAMMPS":
+            os.chdir("LAMMPS")
+        try:
+            self.atoms = read("final_struc.data", format="lammps-data")
+        finally:
+            if not os.path.basename(current_dir) == "LAMMPS":
+                os.chdir(current_dir)
+
+
+import os
+
+from AmorphousStrucASE import AmorphousStrucASE
+from interfaces.LAMMPS_Interface import LammpsInterface
+
+
+def save_traj(struc, traj_path, step):
+    struc.atoms.write(traj_path, format="xyz", append=True, comment=f"step_{step}")
+
+
+def generate_crystal(total_desired_atoms, alpha, n_m, starting_struc=None):
+    print("Starting crystal generation...")
+    traj_file = "growth_trajectory.xyz"
+
+    # Delete existing trajectory file if it exists
+    if os.path.exists(traj_file):
+        os.remove(traj_file)
+    # clean lammps data
+    if os.path.exists("LAMMPS/final_struc.data"):
+        os.remove("LAMMPS/final_struc.data")
+
+    if starting_struc is None:
+        crystal_struc = AmorphousStrucASE(atoms=None)
+        crystal_struc.atoms.set_cell([21.5, 21.5, 50.0])
+        crystal_struc.atoms.set_pbc([True, True, True])
+        crystal_struc.set_limits(alpha=alpha, n_m=n_m)
+        hit_final = False
+    else:
+        crystal_struc = starting_struc.copy()
+        hit_final = True
+
+    # crystal_struc._build_neighbour_list()  # Important: Initialize neighbor list
+
+    number_write = 0
+    TOTAL_DESIRED_ATOM, new_total_atoms = total_desired_atoms, 0
+    max_placement_attempts = 500  # Add maximum attempts to prevent infinite loops
+    placement_attempts = 0
+
+    while new_total_atoms < TOTAL_DESIRED_ATOM and placement_attempts < max_placement_attempts:
+        placement_attempts += 1
+        current_number_atoms = len(crystal_struc.atoms)
+
+        if current_number_atoms == 0:
+            atom_to_add = "Si"
+            made_placement = crystal_struc.place_atom_random(atom_to_add)
+
+            if made_placement:
+                number_write += 1
+                save_traj(crystal_struc, "growth_trajectory.xyz", number_write)
+                new_total_atoms = len(crystal_struc.atoms)
+                placement_attempts = 0  # Reset attempts counter after successful placement
+            continue
+
+        # pick the spot...
+
+        # compute the global Si/O counts
+        n_Si = crystal_struc.count_atoms("Si")
+        n_O = crystal_struc.count_atoms("O")
+
+        # enforce O < 2*Si → add O until you hit 2:1, else add Si
+        atom_to_add = "O" if (2 * n_Si > n_O) else "Si"
+        idx_connect_to = crystal_struc.set_i(atom_to_add)
+
+        MAX_ITER, current_iter = 100, 0
+        made_placement = False
+
+        while current_iter <= MAX_ITER and not made_placement:
+            current_iter += 1
+            made_placement = crystal_struc.place_atom_random(
+                atom_to_add,
+                idx_anchor=idx_connect_to,
+                limits=crystal_struc.limits,
+                max_iter=50  # Increase max_iter for placement attempts
+            )
+
+            if not made_placement:
+                idx_connect_to = crystal_struc.set_i(atom_to_add)  # Try different connection point if placement failed
+
+        if made_placement:
+            new_total_atoms = len(crystal_struc.atoms)
+            print(f"Placed atom {new_total_atoms}/{TOTAL_DESIRED_ATOM}", flush=True)
+
+            number_write += 1
+            save_traj(crystal_struc, "growth_trajectory.xyz", number_write)
+            placement_attempts = 0  # Reset attempts counter after successful placement
+
+        else:
+            print("Attempting structure optimization...")
+            if hit_final:
+                max_steps, start_T, final_T = 250, 500, 1000
+            else:
+                max_steps, start_T, final_T = 1000, 298, 4000
+
+            FF = "BKS"
+            struc_optimizer = LammpsInterface(crystal_struc)
+            crystal_struc.atoms = struc_optimizer.opt_struc(
+                "anneal",
+                steps=max_steps,
+                start_T=start_T,
+                final_T=final_T,
+                FF=FF
+            )
+
+            # crystal_struc.fix_2MR(0, 2.0)
+
+            if not hit_final:
+                crystal_struc.slice(raise_by=1.0)
+
+            number_write += 1
+            save_traj(crystal_struc, "growth_trajectory.xyz", number_write)
+
+    if new_total_atoms == TOTAL_DESIRED_ATOM:
+        print("Performing final optimization...")
+        struc_optimizer = LammpsInterface(crystal_struc)
+
+        if hit_final:
+            _ = struc_optimizer.opt_struc("anneal", steps=250, start_T=500, final_T=2000, FF="BKS")
+            new_atoms = struc_optimizer.opt_struc(
+                "final",
+                steps=1000,
+                start_T=298,
+                final_T=298,
+                FF="BKS"
+            )
+            crystal_struc.update_atoms(new_atoms)
+        else:
+            _ = struc_optimizer.opt_struc("anneal", steps=250, start_T=298, final_T=2000, FF="BKS")
+            crystal_struc.atoms = struc_optimizer.opt_struc(
+                "anneal",
+                steps=750,
+                start_T=2000,
+                final_T=298,
+                FF="BKS"
+            )
+            crystal_struc.update_atoms(crystal_struc.atoms)
+
+        # crystal_struc.fix_2MR(2, 2.0, delete=False)
+
+    number_write += 1
+    save_traj(crystal_struc, "growth_trajectory.xyz", number_write)
+    crystal_struc.atoms.write("growth_trajectory.xyz", format="xyz", append=True, comment="final structure")
+    crystal_struc.atoms.write("final_struc.cif", format="cif", append=False)
+
+    return crystal_struc
+
+
+if __name__ == "__main__":
+    generate_crystal(501, 0.005, 3)
+
+
+def check_silanol_density(self, side: str):
+    """
+    Compute the silanol (–Si–OH) density on the given surface(s).
+
+    Parameters
+    ----------
+    side : {"top", "bottom", "both", "total"}
+        Which surface to compute:
+        - "top" or "bottom": only that face
+        - "both": both faces, merged
+        - "total": count all H, divide by total surface area
+
+    Returns
+    -------
+    density : float
+        Number of surface H per 1 Å² (surface area in 0.1 nm² units).
+    """
+    # ensure neighbor list up to date
+    self._build_neighbour_list()
+
+    def collect_H(surface_Si_idxs, surface_O_idxs):
+        """
+        Given surface Si and O atom indices, return unique H-indices that
+        are bonded to those O's (via one more neighbor-hop).
+        """
+        # 1) include any O bound to surface Si:
+        for i in surface_Si_idxs:
+            neigh = self._nl.get_neighbors(i)[0]
+            surface_O_idxs = np.concatenate([surface_O_idxs, neigh])
+
+        # 2) unique O's
+        surface_O_idxs = np.unique(surface_O_idxs)
+
+        # 3) find all H neighbors of those O's
+        H_set = set()
+        for o in surface_O_idxs:
+            neigh = self._nl.get_neighbors(int(o))[0]
+            for j in neigh:
+                if self.atoms[j].symbol == "H":
+                    H_set.add(int(j))
+
+        return np.array(sorted(H_set), dtype=int)
+
+    # ------------- choose side(s) ----------------
+    side = side.lower()
+    if side in ("top", "both"):
+        # probe top
+        self.probe_surface_rays(max_iter=7, from_top=True)
+        Si_top = [i for i in self.idx_surface_atoms_top if self.atoms[i].symbol == "Si"]
+        O_top = np.array([i for i in self.idx_surface_atoms_top if self.atoms[i].symbol == "O"], dtype=int)
+        H_top = collect_H(Si_top, O_top)
+    if side in ("bottom", "both"):
+        # probe bottom
+        self.probe_surface_rays(max_iter=7, from_top=False)
+        Si_bot = [i for i in self.idx_surface_atoms_bot if self.atoms[i].symbol == "Si"]
+        O_bot = np.array([i for i in self.idx_surface_atoms_bot if self.atoms[i].symbol == "O"], dtype=int)
+        H_bot = collect_H(Si_bot, O_bot)
+
+    if side == "top":
+        H_idxs = H_top
+    elif side == "bottom":
+        H_idxs = H_bot
+    elif side == "both":
+        H_idxs = np.unique(np.concatenate([H_top, H_bot]))
+    elif side == "total":
+        # all H in structure
+        H_idxs = np.array([i for i, a in enumerate(self.atoms) if a.symbol == "H"], dtype=int)
+        # assume you have computed total surface area already
+        area = 0.01 * self.total_surface_area
+        return len(H_idxs) / area
+    else:
+        raise ValueError(f"Invalid side: {side!r}")
+
+        # compute area in 0.1 nm units: (0.1 * a) * (0.1 * b) = a*b * 0.01
+    a, b, _ = self.atoms.get_cell().cellpar()[:3]
+    surface_area = (0.1 * a) * (0.1 * b)
+
+    return len(H_idxs) / surface_area
+
+
+def _ff_block(self, FF: str) -> str:
+    if FF == "BKS":
+        return textwrap.dedent("""\
+                pair_style      hybrid/overlay buck/coul/long 5.5 8.0 lj/cut 1.2
+                kspace_style    ewald 1.0e-4
+
+                pair_coeff      1 1 buck/coul/long 0.0     0.2           0.0    # Si-Si (dummy)
+                pair_coeff      2 2 buck/coul/long 32026.6817 0.36231884 4035.6986 # O-O
+                pair_coeff      1 2 buck/coul/long 415187.0765 0.20520482 3079.5402 # Si-O
+
+
+                pair_coeff      1 1 lj/cut 0.0 0.0  # Si-Si
+                pair_coeff      2 2 lj/cut 59.95595939 1.6 1.6 # O-O
+                pair_coeff      1 2 lj/cut 46.11996875 1.2 1.2 # Si-O
+
+                #if Al is present 
+
+                pair_coeff      1 3 buck/coul/long 0.0     0.2           0.0    # Si-Al (dummy)
+                pair_coeff      2 3 buck/coul/long 0.0     0.2           0.0    # O-Al (dummy)
+                pair_coeff      3 3 buck/coul/long 0.0     0.2           0.0    # Al-Al (dummy)
+
+                pair_coeff      3 3 lj/cut 0.0 0.0  # Al-Al (dummy)
+                pair_coeff      3 2 lj/cut 53.038 1.3 1.3 # Al-O
+                pair_coeff      3 1 lj/cut 46.11996875 0 0 # Si-Al (dummy)
+
+                set type 1 charge  2.4   # Si
+                set type 2 charge -1.2   # O
+
+                #if Al is present 
+                set type 2 charge 1.4   # Al
+
+
+
+
+            """)
+
+
+   def _write_data_file(self):
+        atom_numbering: Dict[str, int] = {"Si": 1, "O": 2}
+        for atom in self.atoms:
+            assert atom.symbol in self.atom_masses, f"atom {atom.symbol} not known in masses"
+            assert atom.symbol in self.atom_charges, f"atom {atom.symbol} not known in charges"
+        self.cl = [self.atoms.get_pbc()[0],
+                   self.atoms.get_pbc()[1],
+                   self.atoms.get_pbc()[2]]
+        with open("structure.data", "w") as f:
+            # Header
+            f.write("Generated through interface; ")
+            for atom_type, atom_number in atom_numbering.items():
+                f.write(f"{atom_type} is {atom_number}  ")
+            f.write("\n\n")
+
+            # Atoms count and types
+            f.write("{:d} atoms\n{:d} atom types\n\n".format(len(self.atoms), len(atom_numbering.keys())))
+
+            # PBC boundaries
+            for pbcs in self.atoms.get_pbc():
+                assert pbcs is not None, "No PBCs!"
+            f.write("{} {} xlo xhi\n{} {} ylo yhi\n{} {} zlo zhi\n\n".format(
+                0,
+                self.atoms.get_cell()[0][0],
+                0,
+                self.atoms.get_cell()[1][1],
+                0,
+                self.atoms.get_cell()[2][2],
+            ))
+
+            # Masses
+            f.write("Masses\n\n")
+            for atom_type, atom_number in atom_numbering.items():
+                f.write(f"{atom_number} {self.atom_masses[atom_type]}\n")
+            f.write("\n")
+
+            # Atoms positions and charges
+            f.write("Atoms # charge\n\n")
+            for i, (atom, xyz) in enumerate(zip(self.atoms, self.xyz_coords)):
+                f.write(
+                    f"{i + 1} {atom_numbering[atom.symbol]} {self.atom_charges[atom.symbol]} {xyz[0]} {xyz[1]} {xyz[2]} 0 0 0\n")
+            f.write("\n")
+
+            # Velocities
+            f.write("Velocities\n\n")
+            for i, _ in enumerate(self.atoms):
+                f.write(f"{i + 1} 0 0 0\n")
+
+
+
+
+"""
+not implemented yet
+"""
+
+def _make_point(self,
+            idx_ref_atom: int,
+            bond_length: float,
+            tolerance: float
+            ) -> np.ndarray:
+"""
+Brute-force sample points on the sphere of radius `bond_length` around
+atom `idx_ref_atom`, pick one that's at least `tolerance` away from all
+other atoms (within a local 5 Å box). Falls back to the farthest-away
+point if none satisfy the tolerance.
+
+Parameters
+----------
+idx_ref_atom : int
+    Index of the existing atom to bind to; will be modded by N_atoms.
+bond_length : float
+    Radius of the sampling sphere (in Å).
+tolerance : float
+    Minimum allowed distance to *any* other atom.
+
+Returns
+-------
+new_point : (3,) ndarray
+    The chosen Cartesian coordinate.
+"""
+# 1) fetch positions & cell
+pos = self.atoms.get_positions()  # (N,3)
+N = len(pos)
+idx = idx_ref_atom % N
+ref = pos[idx]  # (3,)
+cell = self.atoms.get_cell()  # (3,3)
+inv = np.linalg.inv(cell)
+pbc = any(self.atoms.get_pbc())
+
+# 2) build minimum-image vectors from ref → each atom
+dr = pos - ref  # (N,3)
+if pbc:
+    frac = inv.dot(dr.T)  # (3,N)
+    frac -= np.rint(frac)
+    dr = (cell.dot(frac)).T  # (N,3)
+
+# 3) select only “close” atoms in a 5 Å cuboid (and not ref itself)
+mask_close = (
+        (np.abs(dr[:, 0]) <= 5.0) &
+        (np.abs(dr[:, 1]) <= 5.0) &
+        (np.abs(dr[:, 2]) <= 5.0)
+)
+mask_close[idx] = False
+close_dr = dr[mask_close] + ref  # (M,3)
+
+# 4) sample 250×250 points on the sphere of radius `bond_length`
+th = np.linspace(0, 2 * np.pi, 250)
+ph = np.linspace(0, 2 * np.pi, 250)
+thg, phg = np.meshgrid(th, ph, indexing='xy')
+r = bond_length
+x = r * np.sin(phg) * np.cos(thg)
+y = r * np.sin(phg) * np.sin(thg)
+z = r * np.cos(phg)
+# new_pts has shape (3,250,250)
+new_pts = np.stack((x, y, z), axis=0) + ref[:, None, None]
+
+# 5) for each candidate, compute its distance to the *closest* of the close_dr set
+#    close_dr[:, :, None, None] broadcasts to (M,3,1,1)
+#    new_pts[None, :, :, :] is (1,3,250,250)
+#    subtract → (M,3,250,250) → norm over axis=1 → (M,250,250)
+d_all = np.linalg.norm(close_dr[:, :, None, None] - new_pts[None, :, :, :], axis=1)
+dmin = d_all.min(axis=0)  # (250,250)
+
+# 6) keep only those ≥ tolerance
+good = dmin >= tolerance
+pts = new_pts.transpose(1, 2, 0)[good]  # (K,3)
+
+# 7) pick one
+if pts.shape[0] == 1:
+    choice = pts[0]
+elif pts.shape[0] > 1:
+    # many choices: just pick the first
+    choice = pts[0]
+else:
+    # none ≥ tol: pick the point with maximal dmin
+    flat = dmin.flatten()
+    mask_f = flat == flat.max()
+    idxs = np.nonzero(mask_f)[0]
+    # take the first of possibly several maxima
+    i0 = idxs[0]
+    # unravel into (i,j)
+    i, j = divmod(i0, dmin.shape[1])
+    choice = new_pts[:, i, j]
+
+return choice
+
+
+def place_new_atom(self,
+               idx_ref_atom: int,
+               new_atom_type: str,
+               bond_length: float,
+               tolerance: float = 1.5
+               ) -> None:
+"""
+Place a new atom of type `new_atom_type` bonded to atom `idx_ref_atom`
+at distance `bond_length`, ensuring it is at least `tolerance` away
+from all other atoms.
+
+Parameters
+----------
+idx_ref_atom : int
+    Index of the existing atom to bind to.
+new_atom_type : str
+    Chemical symbol of the new atom.
+bond_length : float
+    Desired bond length (Å) from the reference atom.
+tolerance : float, default=1.5
+    Minimum allowed distance (Å) from any other atom.
+
+Effects
+-------
+- Computes a valid new coordinate via `_make_point`.
+- Appends the new Atom to `self.atoms`.
+"""
+N = len(self.atoms)
+assert 0 <= idx_ref_atom < N, (
+    f"Atom index {idx_ref_atom} out of range (0 to {N - 1})"
+)
+
+# find a good point on the bond‐length sphere
+new_point = self._make_point(idx_ref_atom, bond_length, tolerance)
+
+# add it to the ASE Atoms object
+self.atoms.append(Atom(new_atom_type, position=new_point))
+self.update_atoms(self.atoms)
+
+
+def move_atom(self,
+          idx_move: int,
+          idx_ref: int,
+          new_dist: float
+          ) -> None:
+"""
+Move atom `idx_move` so that its distance to atom `idx_ref` becomes `new_dist`,
+along the original line connecting them, respecting periodic boundary conditions.
+
+Parameters
+----------
+idx_move : int
+    Index of the atom to move.
+idx_ref : int
+    Index of the atom to measure from.
+new_dist : float
+    Desired distance (Å) between the two atoms after moving.
+
+Effects
+-------
+Updates `self.atoms` in place, changing only the position of atom `idx_move`.
+"""
+N = len(self.atoms)
+assert 0 <= idx_move < N and 0 <= idx_ref < N, (
+    f"Atom indices out of range: idx_move={idx_move}, idx_ref={idx_ref}"
+)
+
+# 1) get current positions and PBC/cell info
+pos = self.atoms.get_positions()
+p0, p1 = pos[idx_move], pos[idx_ref]
+cell = self.atoms.get_cell()
+pbc = self.atoms.get_pbc()
+
+# 2) compute the minimum‐image displacement vector from ref → move
+dr = p0 - p1
+if any(pbc):
+    inv_cell = np.linalg.inv(cell)
+    frac = inv_cell.dot(dr)
+    frac -= np.rint(frac)
+    dr = cell.dot(frac)
+
+# 3) normalize and build the new coordinate at distance new_dist
+unit = dr / np.linalg.norm(dr)
+new_pos = p1 + unit * new_dist
+
+# 4) write it back into the Atoms object
+positions = pos.copy()
+positions[idx_move] = new_pos
+self.atoms.set_positions(positions)
+self.update_atoms(self.atoms)
+
+
+def fix_2MR(self,
+        max_allowed: int,
+        tolerance: float,
+        delete: bool = True
+        ) -> None:
+"""
+Ensures that at most `max_allowed` two-membered Si rings remain.
+
+Builds a bond graph (edge whenever distance ≤ `tolerance`), finds
+all simple cycles of length 2 among Si atoms, and then either
+deletes or “inverts” them until you’re down to `max_allowed`.
+
+Parameters
+----------
+max_allowed : int
+    Maximum number of 2-membered Si rings to keep.
+tolerance : float
+    Distance cutoff (Å) for defining a bond.
+delete : bool, default=True
+    If True, randomly delete one O from each excess 2-ring.
+    If False, attempt the “invert” strategy: move & re-place O’s,
+    then delete any remaining over-coordinated O’s.
+"""
+# 1) Build bond graph
+G = nx.Graph()
+N = len(self.atoms)
+syms = self.atoms.get_chemical_symbols()
+G.add_nodes_from(range(N))
+for i in range(N):
+    for j in range(i + 1, N):
+        if self.atoms.get_distance(i, j, mic=True) <= tolerance:
+            G.add_edge(i, j)
+
+# 2) Find all 2-membered Si cycles
+cycles = nx.cycle_basis(G)
+two_rings = [
+    cycle for cycle in cycles
+    if len(cycle) == 2 and all(syms[k] == 'Si' for k in cycle)
+]
+n2 = len(two_rings)
+print(f"number of 2MR: {n2}")
+
+if delete:
+    # Delete one O from each excess ring
+    if n2 > max_allowed:
+        to_kill = two_rings[: n2 - max_allowed]
+        marked = []
+        for ring in to_kill:
+            # pick a random O in the ring
+            os_in_ring = [i for i in ring if syms[i] == 'O']
+            if os_in_ring:
+                marked.append(random.choice(os_in_ring))
+        # delete in reverse order so indices stay valid
+        for idx in sorted(set(marked), reverse=True):
+            del self.atoms[idx]
+            self.update_atoms(self.atoms)
+else:
+    # “Invert” strategy: move out & re-place O’s, then delete
+    over = set()
+    for ring in two_rings:
+        for i in ring:
+            if syms[i] == 'O' and self.get_cn(i) > self.max_cn.get('O', 0):
+                over.add(i)
+    over = sorted(over, reverse=True)
+    if len(over) > 1:
+        # for all but one, move & re-place
+        for idx in over[:-1]:
+            nbrs = self._nl
+            idx_mv = random.choice(nbrs)
+            self.move_atom(idx_mv, idx, 2.5)
+            self.place_new_atom(idx_mv, 'O', 1.62)
+        # then delete all of them
+        for idx in over:
+            del self.atoms[idx]
+            self.update_atoms(self.atoms)
+
