@@ -215,6 +215,8 @@ def main_generation_routine(
         Number of atoms in each generated slab.
     n_m : int
         Maximum Fourier mode parameter (passed to generate_crystal).
+    starting_struc: Optional[Atoms]
+        Initial structure (passed to generate_crystal).
     target_ratio : Dict[str,int]
         Cation ratio (e.g. {"Si":7, "Al":3}).
     traj_filename : str

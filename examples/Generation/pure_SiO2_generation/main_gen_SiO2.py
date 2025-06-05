@@ -16,6 +16,7 @@ if __name__ == '__main__':
         base_output_dir=base_output_dir,
         alphas=alphas,
         max_workers=max_workers,
+        starting_struc=None,
         timeout_seconds=timeout_seconds,
         total_desired_atoms=432,
         n_m=4,
