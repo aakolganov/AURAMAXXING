@@ -379,7 +379,7 @@ class LammpsInterface:
             phase, including temperature control, output settings, and group definitions.
         :rtype: str
         """
-        dump_freq = max(1, steps // 500)
+        dump_freq = max(1, steps // 15)
         seed = self.rng.integers(1000000)
         elems = self._element_list
         base =  textwrap.dedent(f"""\

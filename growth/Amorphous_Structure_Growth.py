@@ -70,7 +70,7 @@ def generate_amorphous_structure(total_desired_atoms: int,
         amorph_struc.atoms.set_cell([21.5, 21.5, 50.0]) #default cell parameters; 3x3 beta-cristobalite unit cell
         amorph_struc.atoms.set_pbc([True, True, True])
         # Define rough surface limits using a Fourier function
-        amorph_struc.set_limits(alpha=alpha, n_m=n_m, const_V=True, H=3)
+        amorph_struc.set_limits(alpha=alpha, n_m=n_m) #, const_V=True, H=3)
         # indicates that we are starting from scratch
         is_existing_structure = False
         frozen_indices = [] #no atoms are frozen

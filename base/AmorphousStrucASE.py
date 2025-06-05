@@ -245,13 +245,13 @@ class AmorphousStrucASE:
         return len(nbrs)
 
 
-    def set_i(self, atom_symbol: str, weight_z: bool = False, al_penalty: float=0.5) -> int:
+    def set_i(self, atom_symbol: str, weight_z: bool = False, al_penalty: float=0.0001) -> int:
 
         """
         Pick an existing atom *of type* atom_symbol,
         whose coordination < max_cn, weighted by CN (and optionally by z).
         If atom_symbol == "Al", then candidates that already have an Al neighbor
-        get their weight multiplied by `al_penalty` (default 0.5).
+        get their weight multiplied by `al_penalty` (default 0.0001).
 
         Parameters
         ----------
@@ -520,18 +520,19 @@ class AmorphousStrucASE:
 
         Effects
         -------
-        - Writes the structure before slicing to "before_slice.xyz".
+        - Writes the structure before slicing to "before_slice.xyz" if needed
         - Deletes any atom i for which
               z_i > z_min + self.limits[3][ix,iy] + 1
           where (ix,iy) = find_nearest(x_i, self.limits[0]), find_nearest(y_i, self.limits[1])
           and z_min = min_j z_j.
-        - Writes the structure after slicing to "after_slice.xyz".
+        - Writes the structure after slicing to "after_slice.xyz" if needed
         - Increments self.limits[3] (the “upper” grid) by `raise_by`.
         """
 
         if write_files:
             self.atoms.write("before_slice.xyz", format="xyz")
 
+        self.atoms.wrap()
         pos = self.atoms.get_positions()  # (N,3) array
         z_min = pos[:, 2].min() # find the "bottom" of the surface
         up = self.limits[3] # upper limit grid
@@ -554,6 +555,7 @@ class AmorphousStrucASE:
 
         # Slicing atoms using mask
         self.atoms = self.atoms[keep]
+
         self.update_atoms(self.atoms)
 
         # 2.5) snapshot after slicing
