@@ -305,13 +305,21 @@ class AmorphousStrucASE:
 
         # 6) If Al — penalty for already existing Al neighbors:
         if atom_symbol == "Al":
-            has_al = []
-            for idx in sub:
-                nbrs, _ = self._nl.get_neighbors(int(idx))
-                has_al.append(any(self.atoms[n].symbol == "Al" for n in nbrs))
-            has_al = np.array(has_al, bool)
-            # multiplying the penalty by the weight of the Al neighbors
-            w[has_al] *= al_penalty
+            al_indices = [i for i, s in enumerate(symbols) if s == "Al"]
+            for i_sub, idx in enumerate (sub):
+                #checking if there is Al within 3 angs distance
+                pos_idx = self.atoms.get_positions()[idx]
+                found_close_al = False
+                for j in al_indices:
+                    if j == idx:
+                        continue # do not count self
+                    d = self._pbc_dist(pos_idx, self.atoms.get_positions()[j])
+                    d_cutoff = 3.5
+                    if d < d_cutoff:
+                        found_close_al = True
+                        break
+                if found_close_al: #if we found Al close - multiplying the penalty by the weight of the Al neighbors
+                    w[i_sub] *= al_penalty
 
         # 7) renormalize & choose
         total = w.sum()
