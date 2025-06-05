@@ -3,7 +3,7 @@ from glob import glob
 from ase.io import read
 from interfaces.MACE_interface import MACEInterface
 import os
-os.environ["OMP_NUM_THREADS"] = "8"
+os.environ["OMP_NUM_THREADS"] = "16"
 
 def saturate_structure(filename: str,
                        mace_model_path: str,
