@@ -245,13 +245,13 @@ class AmorphousStrucASE:
         return len(nbrs)
 
 
-    def set_i(self, atom_symbol: str, weight_z: bool = False, al_penalty: float=0.0001) -> int:
+    def set_i(self, atom_symbol: str, weight_z: bool = False, al_penalty: float=10E-8) -> int:
 
         """
         Pick an existing atom *of type* atom_symbol,
         whose coordination < max_cn, weighted by CN (and optionally by z).
         If atom_symbol == "Al", then candidates that already have an Al neighbor
-        get their weight multiplied by `al_penalty` (default 0.0001).
+        get their weight multiplied by `al_penalty` (default 10E-8).
 
         Parameters
         ----------
@@ -314,7 +314,7 @@ class AmorphousStrucASE:
                     if j == idx:
                         continue # do not count self
                     d = self._pbc_dist(pos_idx, self.atoms.get_positions()[j])
-                    d_cutoff = 3.5
+                    d_cutoff = 3.5 # sphere cutoff distance
                     if d < d_cutoff:
                         found_close_al = True
                         break
