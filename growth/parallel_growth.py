@@ -52,6 +52,7 @@ def worker_generate(
     bar_color: str,
     bar_position: int,
     result_queue: Queue,
+    calculator = "lammps"
 ) -> None:
     """
     Worker function to generate one slab with a given alpha.
@@ -128,6 +129,8 @@ def worker_generate(
             TARGET_RATIO=target_ratio,
             traj_file=traj_filename,
             progress_cb=progress_callback,
+            demo_mode=False,
+            calculator=calculator
         )
 
 
@@ -193,7 +196,8 @@ def main_generation_routine(
     n_m: int,
     target_ratio: Dict[str, int],
     traj_filename: str,
-    final_struc_template: str
+    final_struc_template: str,
+    calculator = "lammps"
 ) -> None:
     """
     Orchestrates parallel generation of multiple slabs, each with a different alpha.
@@ -272,7 +276,8 @@ def main_generation_routine(
                     work_dir,
                     colour,
                     position,
-                    result_q
+                    result_q,
+                    calculator
                 ),
                 daemon=False
             )

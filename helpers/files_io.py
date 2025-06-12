@@ -16,7 +16,7 @@ def save_traj(struc, traj_path, step):
     struc.atoms.write(traj_path, format="xyz", append=True, comment=f"step_{step}")
 
 
-def add_LAMMPS_dump_to_traj(dump_path: str = "LAMMPS/dump.xyz", traj_file: str = "growth_trajectory.xyz"):
+def add_dump_to_traj(dump_path: str = "LAMMPS/dump.xyz", traj_file: str = "growth_trajectory.xyz"):
     """
     Add the content of LAMMPS dump to the trajectory file.
     """

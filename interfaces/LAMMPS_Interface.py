@@ -11,7 +11,6 @@ from ase.constraints import FixAtoms
 from ase.io.lammpsdata import write_lammps_data
 
 from default_constants import default_masses, default_charges, ev_to_kcal
-
 @contextmanager
 def cd(path: Path):
     prev = Path.cwd()

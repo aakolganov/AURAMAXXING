@@ -245,7 +245,7 @@ class AmorphousStrucASE:
         return len(nbrs)
 
 
-    def set_i(self, atom_symbol: str, weight_z: bool = False, al_penalty: float=10E-8) -> int:
+    def set_i(self, atom_symbol: str, weight_z: bool = False, al_penalty: float=0.000005) -> int:
 
         """
         Pick an existing atom *of type* atom_symbol,
@@ -314,7 +314,7 @@ class AmorphousStrucASE:
                     if j == idx:
                         continue # do not count self
                     d = self._pbc_dist(pos_idx, self.atoms.get_positions()[j])
-                    d_cutoff = 3.5 # sphere cutoff distance
+                    d_cutoff = 5 # sphere cutoff distance
                     if d < d_cutoff:
                         found_close_al = True
                         break
@@ -323,7 +323,7 @@ class AmorphousStrucASE:
 
         # 7) renormalize & choose
         total = w.sum()
-        if total <= 0:
+        if total < 0:
             # fallback to uniform
             w = np.ones_like(w)
             total = w.sum()
@@ -490,8 +490,8 @@ class AmorphousStrucASE:
         """
         # 1) center‐of‐cell placement when no anchor
         if idx_anchor is None:
-            # fractional [0.5,0.5,0.5] → Cartesian
-            new_coords =  0.5 * np.ones(3) @ self.atoms.get_cell()
+            # fractional → Cartesian
+            new_coords =  [0.5, 0.5, 0.05] @ self.atoms.get_cell()
             self._commit_atom(atom_type, coords=new_coords)
             return True
 

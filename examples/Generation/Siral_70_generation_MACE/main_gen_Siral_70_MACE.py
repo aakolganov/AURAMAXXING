@@ -1,5 +1,5 @@
 """
-routine to generate 8 Sirol-70 structures of with different roughness in parallel
+routine to generate Sirol-70 structures of with different roughness using MACE as calculator
 """
 
 from growth.parallel_growth import main_generation_routine
@@ -19,8 +19,9 @@ if __name__ == '__main__':
         timeout_seconds=timeout_seconds,
         total_desired_atoms=440,
         n_m=4,
+        calculator="mace",
         starting_struc=None,
         target_ratio={"Si":2, "Al":1},
         traj_filename="growth_trajectory.xyz",
-        final_struc_template="Siral_70_alpha_{alpha}.cif"
+        final_struc_template="Siral_70_alpha_{alpha}.cif",
     )

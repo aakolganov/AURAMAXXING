@@ -3,24 +3,19 @@ import time
 from ase import Atoms
 from tqdm import tqdm
 from base.AmorphousStrucASE import AmorphousStrucASE
-from interfaces.LAMMPS_Interface import LammpsInterface
+from interfaces.Optimizer_Interface import LammpsOptimizer, MACEOptimizer
 from ase.constraints import FixAtoms
 from helpers.atom_picker import pick_next_atom
-from helpers.files_io import save_traj, add_LAMMPS_dump_to_traj
-from typing import Optional, Dict, Callable
+from helpers.files_io import save_traj, add_dump_to_traj
+from typing import Optional, Dict, Callable, Literal
 from ase.io import read
 from pathlib import Path
 
-# Default ratio for testing growth on top
-
 TEST_TARGET_RATIO = {
-    "Si": 10,
-    "Al": 45,
+    "Si": 2,
+    "Al": 1,
 }
 
-
-
-#init_struc_test = read("../POSCAR_bare_gAl_110_2x2x2")
 
 def generate_amorphous_structure(total_desired_atoms: int,
                                  alpha:float,
@@ -30,7 +25,9 @@ def generate_amorphous_structure(total_desired_atoms: int,
                                  traj_file:Optional[str]="growth_trajectory.xyz",
                                  final_struc_file:Optional[str]="final_struc.cif",
                                  progress_cb: Optional[Callable[[int], None]] = None,
-                                 demo_mode: Optional[bool] = False
+                                 demo_mode: Optional[bool] = False,
+                                 calculator: Literal["lammps", "mace"] = "lammps",
+                                 mace_model_path: Optional[str] = None
                                  ) -> AmorphousStrucASE:
     """
     Grow a mixed Si/Al amorphous oxide slab by sequentially placing atoms until the desired number of atoms is reached.
@@ -54,14 +51,16 @@ def generate_amorphous_structure(total_desired_atoms: int,
     :param Optional[str], default="final_struc.cif" final_struc_file: Path to the CIF file to record the final structure.
     :param Optional[Callable[[int], None]] = None, default=False progress_cb: Whether to display a progress bar during growth.
     :param Optional[bool] = False, default=False demo_mode: Whether to run in demo mode (for testing purposes)
+    :param Literal["lammps", "mace"] calculator: which calculator to use for annealing
+    :param Optional[str] = None, default=None mace_model_path: path to the MACE (foundational) model file
     :return AmorphousStrucASE: the final grown structure (ASE wrapper) containing exactly total_desired_atoms atoms.
     """
 
     # 1. Remove any existing trajectory or old LAMMPS output
     if os.path.exists(traj_file):
         os.remove(traj_file)
-    if os.path.exists("../Silica_Alumina/LAMMPS/final_struc.data"):
-        os.remove("../Silica_Alumina/LAMMPS/final_struc.data")
+    if os.path.exists("LAMMPS/final_struc.data"):
+        os.remove("LAMMPS/final_struc.data")
 
     # 2. Initialize the AmorphousStrucASE object
     if starting_struc is None:
@@ -85,14 +84,21 @@ def generate_amorphous_structure(total_desired_atoms: int,
         amorph_struc.set_limits(alpha=alpha, n_m = n_m)
         #later we implement growing an AROUND certain pattern
 
-
     # Counters and limits
     number_write = 0
     TOTAL_DESIRED_ATOM, new_total_atoms = total_desired_atoms, 0
     max_placement_attempts = 500  # bail out if too many failed placement attempts
     placement_attempts = 0
 
-    # 3. Progress bar for demo mode:
+    # Initialazing the calculator:
+    if calculator == "mace":
+        if not mace_model_path:
+            raise ValueError("MACE model path required for MACE calculator")
+        optimizer = MACEOptimizer(mace_model_path)
+    else:
+        optimizer = LammpsOptimizer(AmorphousStrucASE(atoms=amorph_struc.atoms.copy()))
+
+    # 3.5 (Optional). Progress bar for demo mode:
     if demo_mode:
         pbar = tqdm(total=TOTAL_DESIRED_ATOM, desc=f"Growing atoms for α={alpha:.3f}", leave=True)
 
@@ -169,31 +175,20 @@ def generate_amorphous_structure(total_desired_atoms: int,
         else:
             #pbar.write("⚠️  Attempting structure optimization…")
             # Choose anneal parameters depending on whether we have the existing structrue
-            if is_existing_structure:
-                max_steps, start_T, final_T = 1000, 298, 800
-            else:
-                max_steps, start_T, final_T = 1000, 298, 4000
-
-            FF = "BKS" #BKS force field by default
-            struc_optimizer = LammpsInterface(amorph_struc)
-            if frozen_indices:
-                constraint = FixAtoms(indices=frozen_indices)
-                struc_optimizer.atoms.set_constraint(constraint)
-            else:
-                # even if there are none - we still need to provide empty object to LAMMPS interface
-                struc_optimizer.atoms.set_constraint(FixAtoms(indices=[]))
-            # Run the LAMMPS anneal, update the ASE Atoms from the output
-            amorph_struc.atoms = struc_optimizer.opt_struc(
-                "anneal",
-                steps=max_steps,
-                start_T=start_T,
-                final_T=final_T,
-                FF=FF
+            new_atoms = optimizer.optimize(
+                atoms=amorph_struc.atoms.copy(),
+                opt_type="anneal",
+                frozen_indices=frozen_indices,
+                steps=1000,
+                start_T=1000 if is_existing_structure else 4000,
+                final_T=298,
+                n_steps_heating=1000,
+                n_steps_cooling=1000
             )
 
-            dump_xyz_path = Path("LAMMPS") / "dump.xyz"
-
-            add_LAMMPS_dump_to_traj(dump_xyz_path, traj_file)
+            # Обновление структуры
+            amorph_struc.atoms = new_atoms
+            optimizer.process_dump(traj_file, optimizer.dump_path)
 
             # If still growing (not final), apply a “slice” to remove atoms above the surface
             prev_count = len(amorph_struc.atoms)
@@ -227,53 +222,29 @@ def generate_amorphous_structure(total_desired_atoms: int,
     if new_total_atoms == TOTAL_DESIRED_ATOM:
         if demo_mode:
             pbar.write("  ✅  Perfoming final optimization...")
-        struc_optimizer = LammpsInterface(amorph_struc)
-        if frozen_indices:
-            constraint = FixAtoms(indices=frozen_indices)
-            struc_optimizer.atoms.set_constraint(constraint)
-        else:
-            # even if there are none - we still need to provide empty object to LAMMPS interface
-            struc_optimizer.atoms.set_constraint(FixAtoms(indices=[]))
-
         if is_existing_structure:
-            # If we started from an existing structure, do a quick anneal + final minimize
-            _ = struc_optimizer.opt_struc("anneal", steps=500, start_T=298, final_T=2000, FF="BKS")
-            add_LAMMPS_dump_to_traj(dump_xyz_path, traj_file)
-            constraint = FixAtoms(indices=frozen_indices)
-            struc_optimizer.atoms.set_constraint(constraint)
-            new_atoms = struc_optimizer.opt_struc(
-                "final",
-                steps=1000,
+            new_atoms = optimizer.optimize(
+                atoms=amorph_struc.atoms.copy(),
+                opt_type="anneal",
+                frozen_indices=frozen_indices,
+                steps=500,
                 start_T=298,
-                final_T=298,
-                FF="BKS"
+                final_T=2000
             )
-            add_LAMMPS_dump_to_traj(dump_xyz_path, traj_file)
-            amorph_struc.update_atoms(new_atoms)
-            #if demo_mode:
-                #view(amorph_struc.atoms)
+            if calculator == "mace":
+                new_atoms = optimizer.optimize(new_atoms, opt_type="minimize")
         else:
-            # If this was a “fresh” growth, do two-stage annealing
-            _ = struc_optimizer.opt_struc("anneal", steps=250, start_T=298, final_T=2000, FF="BKS")
-            add_LAMMPS_dump_to_traj(dump_xyz_path, traj_file)
-            if frozen_indices:
-                constraint = FixAtoms(indices=frozen_indices)
-                struc_optimizer.atoms.set_constraint(constraint)
-            else:
-                # even if there are none - we still need to provide empty object to LAMMPS interface
-                struc_optimizer.atoms.set_constraint(FixAtoms(indices=[]))
-            amorph_struc.atoms = struc_optimizer.opt_struc(
-                "anneal",
+            new_atoms = optimizer.optimize(
+                atoms=amorph_struc.atoms.copy(),
+                opt_type="anneal",
+                frozen_indices=frozen_indices,
                 steps=750,
                 start_T=2000,
-                final_T=298,
-                FF="BKS"
+                final_T=298
             )
-            amorph_struc.update_atoms(amorph_struc.atoms)
-            add_LAMMPS_dump_to_traj(dump_xyz_path, traj_file)
-            #if demo_mode:
-                #view(amorph_struc.atoms)
 
+        amorph_struc.atoms = new_atoms
+        optimizer.process_dump(traj_file, optimizer.dump_path)
 
     # 6. Write out the very final structure (XYZ + CIF+VASP(if w/ base structure))
     number_write += 1
@@ -294,5 +265,13 @@ def generate_amorphous_structure(total_desired_atoms: int,
     return amorph_struc
 
 
-#if __name__ == "__main__":
- #   generate_amorphous_structure(total_desired_atoms=270,alpha= 100, n_m= 4, starting_struc= init_struc_test, demo_mode=True)
+if __name__ == "__main__":
+    # Default ratio for testing growth on top
+
+    init_struc_test = read("../examples/Generation/Siral_10_generation/POSCAR_bare_gAl_110")
+
+    generate_amorphous_structure(total_desired_atoms=320,alpha= 0.05, n_m= 3,
+                                 #starting_struc= init_struc_test,
+                                 demo_mode=True, calculator="lammps"
+                                 )
+                                 #mace_model_path="../examples/Saturation/Siral_10_saturation/2024-01-07-mace-128-L2_epoch-199.model")

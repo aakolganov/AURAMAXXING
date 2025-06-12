@@ -23,7 +23,7 @@ sample_dist: Dict[str, RandomSample[str, Callable]] = {
         "Al": uniform(loc=1.8, scale=0.4)
     }),
     "Al": RandomSample({
-        "Si": uniform(loc=2.3, scale=0.32),
+        "Si": uniform(loc=2.2, scale=0.32),
         "O": uniform(loc=1.8, scale=0.4),
         "Al": burr12(c=20.50918422948114, d=3.282331385061921, loc=1.8153399428512698, scale=1.3978541397862818)
     })
