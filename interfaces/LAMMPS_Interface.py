@@ -230,7 +230,7 @@ class LMPInterface:
             )
             temp_controller.set_temperature(target_temp)
 
-            md.run(n_steps_cooling)
+            md.run(1)
             if step % 1 == 0 and step != 0:
                 atoms.wrap()
                 atoms.write(
