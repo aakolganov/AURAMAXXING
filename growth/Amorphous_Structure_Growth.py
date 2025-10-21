@@ -12,8 +12,8 @@ from ase.io import read
 from pathlib import Path
 
 TEST_TARGET_RATIO = {
-    "Si": 2,
-    "Al": 1,
+    "Si": 10,
+    "Al": 45,
 }
 
 
@@ -270,8 +270,8 @@ if __name__ == "__main__":
 
     init_struc_test = read("../examples/Generation/Siral_10_generation/POSCAR_bare_gAl_110")
 
-    generate_amorphous_structure(total_desired_atoms=320,alpha= 0.05, n_m= 3,
-                                 #starting_struc= init_struc_test,
+    generate_amorphous_structure(total_desired_atoms=305,alpha= 0.1, n_m= 4,
+                                 starting_struc= init_struc_test,
                                  demo_mode=True, calculator="lammps"
                                  )
                                  #mace_model_path="../examples/Saturation/Siral_10_saturation/2024-01-07-mace-128-L2_epoch-199.model")

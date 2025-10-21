@@ -20,7 +20,7 @@ if __name__ == '__main__':
         starting_struc=starting_struc,
         max_workers=max_workers,
         timeout_seconds=timeout_seconds,
-        total_desired_atoms=135,
+        total_desired_atoms=305,
         n_m=3,
         target_ratio={"Si":10, "Al":45},
         traj_filename="growth_trajectory.xyz",

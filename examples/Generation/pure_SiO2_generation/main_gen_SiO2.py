@@ -6,10 +6,10 @@ from growth.parallel_growth import main_generation_routine
 import numpy as np
 
 base_output_dir = "Pure_Silica"
-total_structures = 8
+total_structures = 4
 alphas = np.logspace(-2, 0, total_structures)  # 0.01 → 100max_workers = 4
 timeout_seconds = 10 * 60
-max_workers = 8
+max_workers = 4
 
 if __name__ == '__main__':
     main_generation_routine(
