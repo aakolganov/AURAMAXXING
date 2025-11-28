@@ -35,5 +35,5 @@ pip install torch
 7. MACE (https://github.com/ACEsuit/mace)
 ```bash
 pip install mace-torch
-
+```
 The representative examples script to grow and saturate a Si/Al oxide structure is provided in the folder "examples".
