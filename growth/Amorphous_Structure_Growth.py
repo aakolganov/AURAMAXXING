@@ -80,7 +80,7 @@ def generate_amorphous_structure(total_desired_atoms: int,
         amorph_struc.freeze_bottom_half() #fix the bottom layers for further manipulations
         frozen_indices = amorph_struc.frozen_indices
         #indicates that we are starting from the initial structure-more gentle anneal will be applied
-        is_existing_structure = True #at the moment we're growing the structure on top of some other oxides,
+        is_existing_structure = True #at the moment we're growing the structure on top of some other oxides - later around growth modes would be implemented
         amorph_struc.set_limits(alpha=alpha, n_m = n_m)
         #later we implement growing an AROUND certain pattern
 

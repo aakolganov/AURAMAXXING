@@ -94,8 +94,8 @@ bks_charges = {
 NORM_COORDINATION = {"Si": 4,"Al":4, "O": 2, "H": 1}
 
 # bond lenghst for satuarion routine
-O_H_BONDLENGTH = 1.0
-El_O_BONDLENGTH = 1.65 #bond lenght for Si/Al - O bond
+O_H_BONDLENGTH = 0.98
+El_O_BONDLENGTH = 1.63 #bond lenght for Si/Al - O bond
 
 # If the over-coordinated atoms formally gets assigned a positive charge then it is true
 OVER_POS = {"Si": False, "O": True, "H": False, "Al": False}

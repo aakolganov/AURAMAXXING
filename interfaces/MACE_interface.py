@@ -53,7 +53,7 @@ class TemperatureController:
             self.atoms.set_velocities(velocities * scale_factor)
 
 
-os.environ['PYTORCH_MPS_PREFER_FLOAT32'] = '1'
+os.environ['PYTORCH_MPS_PREFER_FLOAT32'] = '1' #Critical if you are using MAC ARM machine
 
 class MACEInterface:
     """
