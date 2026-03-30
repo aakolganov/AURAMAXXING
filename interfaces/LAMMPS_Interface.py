@@ -1,8 +1,8 @@
-from typing import Optional
+from typing import Optional, Any
 import os
 from os import system as sys
 from typing import Union
-from ase.optimize import LBFGS, FIRE
+from ase.optimize import LBFGS, FIRE2
 from ase.calculators.lammpslib import LAMMPSlib
 from ase import Atoms
 from ase.constraints import FixAtoms
@@ -67,13 +67,15 @@ class LMPInterface:
     Interface of geometry optimization with LAMMPS.
     """
 
-    def __init__(self):
+    def __init__(self, dump_path: str = "dump"):
         """
         Parameters
         ----------
         None needed for initialization
         """
-        pass
+        self.dump_path = Path(dump_path)
+        if not self.dump_path.exists():
+            os.makedirs(self.dump_path)
 
     def _init_lmp_calculator(self, atoms: Atoms) -> LAMMPSlib:
         """
@@ -135,57 +137,94 @@ class LMPInterface:
         )
         return lmp_calc
 
-    def optimize(self, atoms: Atoms, max_steps: int = 450, frozen_atoms: Optional[list[int]]=None) -> float:
+
+    def _attach_trajectory(self, run, atoms: Atoms, 
+                           filename: str, fmt: str = "xyz",
+                           interval: int = 1):
         """
-        Optimization of the structure using MACE.
-
-        Parameters
-        ----------
-        atoms : ase.Atoms
-           Structure to optimize
-        max_steps : int, optional
-           max iterations, by default 150.
-
-        Returns
-        -------
-        energy : float
-            electronic energy of the optimized structure.
-        atoms: ase.Atoms
-            optimized geometry
+        Attaches a modular trajectory writer to an optimizer or MD engine.
+        Handles both native ASE .traj files and appended text formats (like .xyz).
         """
-        calc = self._init_lmp_calculator(atoms)
+        if not Path(self.dump_path).exists():
+            os.makedirs(self.dump_path)
 
-        # 1) Appointing MACE calculator:
-        atoms.calc = calc
+        full_filename = f"{filename}.{fmt}"
+        filepath = self.dump_path / full_filename
+        if Path(filepath).exists():
+            os.remove(filepath)
+        
+        def write_frame():
+            write(filepath, atoms, append=True, format=fmt)
+        run.attach(write_frame, interval=interval)
+
+
+    # def optimize(self, atoms: Atoms, max_steps: int = 450, frozen_atoms: Optional[list[int]]=None) -> float:
+    #     """
+    #     Optimization of the structure using MACE.
+
+    #     Parameters
+    #     ----------
+    #     atoms : ase.Atoms
+    #        Structure to optimize
+    #     max_steps : int, optional
+    #        max iterations, by default 150.
+
+    #     Returns
+    #     -------
+    #     energy : float
+    #         electronic energy of the optimized structure.
+    #     atoms: ase.Atoms
+    #         optimized geometry
+    #     """
+    #     calc = self._init_lmp_calculator(atoms)
+
+    #     # 1) Appointing MACE calculator:
+    #     atoms.calc = calc
+    #     if frozen_atoms is not None:
+    #         atoms.set_constraint(FixAtoms(indices=frozen_atoms))
+
+    #     # 2) Running L-BFGS optimizer:
+    #     opt = LBFGS(atoms, logfile=None)  # logfile=None,
+    #     opt.run(fmax=0.1, steps=max_steps)  # correct fmax if needed
+
+    #     # 3) getting the energy of the optimized structure:
+    #     try:
+    #         energy = atoms.get_potential_energy()  # output MACE-calculated energy
+    #     except Exception:
+    #         energy = float("nan")
+
+    #     return energy, atoms
+    
+    def optimize(self, atoms: Atoms, fmax: float = 2.0, max_steps: int = 50,
+                 logfile: str = "log.log", traj_name: str | None = None, traj_fmt: str | None = None,
+                 frozen_atoms: Optional[list[int]]=None,
+                 **kwargs: Any) -> Atoms:
+        """
+        Optimize the geometry of the structure using BFGS.
+        """
+        print("Starting Optimization")
+        traj_interval = kwargs.pop('interval', 1)
+
+        atoms.calc = self._init_lmp_calculator(atoms)
         if frozen_atoms is not None:
             atoms.set_constraint(FixAtoms(indices=frozen_atoms))
 
-        # 2) Running L-BFGS optimizer:
-        opt = LBFGS(atoms, logfile=None)  # logfile=None,
-        opt.run(fmax=0.1, steps=max_steps)  # correct fmax if needed
+        opt = LBFGS(atoms, logfile=self.dump_path/logfile, **kwargs)
+        if traj_name:
+            self._attach_trajectory(opt, atoms, traj_name, traj_fmt, interval=traj_interval)
 
-        # 3) getting the energy of the optimized structure:
-        try:
-            energy = atoms.get_potential_energy()  # output MACE-calculated energy
-        except Exception:
-            energy = float("nan")
+        opt.run(fmax=fmax, steps=max_steps)
+        return atoms
+    
 
-        return energy, atoms
-
-    def anneal(
-        self,
-        atoms: Atoms,
-        n_steps_heating: int,
-        n_steps_cooling: int,
-        start_T: float,
-        final_T: float,
-        timestep_fs: float = 1.25,
-        traj_file: Optional[str] = None,
-        frozen_atoms: Optional[list[int]] = None
-    ):
+    def anneal(self, atoms: Atoms, T_ini: float, T_fin: float, 
+            steps: int = 500, dt: float = 1.0, 
+            logfile: str = "log.log", traj_name: str | None = None, traj_fmt: str | None = None,
+            **kwargs: Any) -> Atoms:
         """
         Annealing of the structure using MACE.
         """
+        print("Starting Anneal")
 
         # 0) Clear any existing dump file
         if os.path.exists("dump.xyz"):
@@ -196,7 +235,7 @@ class LMPInterface:
         atoms.calc = calc
 
         # 2) Heating phase: High temperature equilibration
-        MaxwellBoltzmannDistribution(atoms, temperature_K=start_T)
+        MaxwellBoltzmannDistribution(atoms, temperature_K=T_ini)
 
         # Remove center of mass motion
         atoms.set_momenta(
@@ -204,16 +243,16 @@ class LMPInterface:
         )
 
         # Set up MD integrator
-        md = VelocityVerlet(atoms, timestep_fs * fs)
+        md = VelocityVerlet(atoms, dt * fs)
 
-        temp_controller = TemperatureController(atoms, start_T, tau=50)
+        temp_controller = TemperatureController(atoms, T_fin, tau=50)
 
-        for step in range(n_steps_heating):
+        for step in range(steps):
             md.run(1)
             temp_controller.apply()
 
             # write dump file
-            if step % 1 == 0 and step != 0:
+            if step % 10 == 0 and step != 0:
                 atoms.wrap()
                 atoms.write(
                     "dump.xyz",
@@ -223,10 +262,10 @@ class LMPInterface:
                 )
             
         # 3) Cooling phase:
-        for step in range(n_steps_cooling):
+        for step in range(steps):
             # Calculate target temperature for this step
             target_temp = linear_temperature_schedule(
-                step, n_steps_cooling, T_initial=start_T, T_final=final_T
+                step, steps, T_initial=T_fin, T_final=T_fin
             )
             temp_controller.set_temperature(target_temp)
 
@@ -242,41 +281,3 @@ class LMPInterface:
             temp_controller.apply()
             
         return atoms
-
-    def set_task(
-        self,
-        atoms: Atoms,
-        type_opt: str = "minimize",
-        start_T: Optional[float] = None,
-        final_T: Optional[float] = None,
-        n_steps_heating: Optional[int] = None,
-        n_steps_cooling: Optional[int] = None,
-        max_steps: Optional[int] = None,
-        frozen_atoms: Optional[list[int]] = None,
-    ) -> Atoms:  # Now consistently returns Atoms only
-        if type_opt == "minimize":
-            assert max_steps is not None, "Need to specify max_steps if using type_opt=minimize"
-            _, atoms = self.optimize(atoms, max_steps, frozen_atoms=frozen_atoms)
-            return atoms  # Return just atoms
-
-        elif type_opt == "anneal":
-            assert isinstance(n_steps_heating, int) and isinstance(
-                n_steps_cooling, int
-            ), "For anneal, n_steps_heating and n_steps_cooling are needed"
-            assert (
-                start_T is not None and final_T is not None
-            ), "For anneal, start_T and final_T are needed"
-            atoms = self.anneal(
-                atoms=atoms,
-                n_steps_heating=n_steps_heating,
-                n_steps_cooling=n_steps_cooling,
-                start_T=start_T,
-                final_T=final_T,
-                frozen_atoms=frozen_atoms,
-            )
-            return atoms  # Return just atoms
-
-        else:
-            raise ValueError(
-                f"Unknown opt type {type_opt!r}, allowed: 'minimize', 'anneal'."
-            )
