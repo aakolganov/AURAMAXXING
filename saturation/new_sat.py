@@ -4,8 +4,18 @@ from typing import Optional
 import numpy as np
 from helpers.files_io import highlight_coordination
 from ase.geometry import find_mic
-from default_constants import OXIDATION_POS, OVER_POS, d_min_max
+from default_constants import (
+    OXIDATION_POS,
+    OVER_POS,
+    d_min_max,
+    El_O_BONDLENGTH,
+    O_H_BONDLENGTH,
+)
 from helpers.atom_placing import place_atom_sphere, place_atom_force
+
+# Bond lengths used when attaching saturation groups: O onto an under-coordinated
+# Si/Al (El_O_BONDLENGTH ~ 1.63 A) and H onto an O (O_H_BONDLENGTH ~ 0.98 A).
+DEFAULT_SAT_BOND_LENGTHS = {"O": El_O_BONDLENGTH, "H": O_H_BONDLENGTH}
     
 def move_atom(
     amorph_struct: AmorphousStruc,
@@ -133,9 +143,11 @@ def find_tetrogonal_sites(amorphous_struct: AmorphousStruc) -> list[int]:
 
 def saturate_under_coordinated(
         amorphous_struct: AmorphousStruc,
-        bond_lengths = {"O": 1.2, "H": 0.96},
+        bond_lengths=None,
     ):
     """ Does the basic saturation of atoms through adding OH to positively charged and H to negatively charged. Does not Optimize structure."""
+    if bond_lengths is None:
+        bond_lengths = DEFAULT_SAT_BOND_LENGTHS
     amorphous_struct.atoms.wrap()
 
     highlight_coordination(amorphous_struct, "highlighted_initial.xyz")
@@ -159,9 +171,11 @@ def saturate_under_coordinated(
 
 def correct_charge(
         amorphous_struct: AmorphousStruc,
-        bond_lengths = {"O": 1.2, "H": 0.96},
+        bond_lengths=None,
     ):
     """ Creates a charge neutral surface through adding H and OH until correct. Add to over-coordinated atoms. Does not Optimize structure. """
+    if bond_lengths is None:
+        bond_lengths = DEFAULT_SAT_BOND_LENGTHS
     def try_then_force_place(place_atom: str, attach_idx: int):
         is_placed = place_atom_sphere(amorphous_struct, atom_type=place_atom, idx_anchor=attach_idx, num_samples=250, bond_length=bond_lengths[place_atom])
         if not is_placed:
