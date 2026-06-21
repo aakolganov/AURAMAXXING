@@ -63,7 +63,7 @@ default_masses = {
 default_charges = {
     "Si": 2.4,
     "O": -1.2,
-    "Al": 1.4,
+    "Al": 1.8,  # matches bks_charges; keeps Al2O3 charge-neutral (2*1.8 - 3*1.2 = 0)
     "H": 1.2
 }
 
