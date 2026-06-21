@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from auramaxxing.interfaces.base_interface import CalculatorInterface
+from interfaces.base_interface import CalculatorInterface
 import torch
 
 match_dtype = {
