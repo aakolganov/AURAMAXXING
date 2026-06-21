@@ -217,67 +217,45 @@ class LMPInterface:
         return atoms
     
 
-    def anneal(self, atoms: Atoms, T_ini: float, T_fin: float, 
-            steps: int = 500, dt: float = 1.0, 
-            logfile: str = "log.log", traj_name: str | None = None, traj_fmt: str | None = None,
+    def _target_temperatures(self, steps: int, T_ini: float, T_fin: float) -> list:
+        """Per-step thermostat target temperatures for a monotonic anneal ramp.
+
+        Annealing means starting hot and quenching, so call with T_ini > T_fin.
+        Returns one target per MD step, linearly interpolated from T_ini to T_fin.
+        """
+        return [linear_temperature_schedule(step, steps, T_ini, T_fin) for step in range(steps)]
+
+    def anneal(self, atoms: Atoms, T_ini: float, T_fin: float,
+            steps: int = 500, dt: float = 1.0,
+            logfile: str = "log.log", traj_name: Optional[str] = None, traj_fmt: Optional[str] = None,
             **kwargs: Any) -> Atoms:
         """
-        Annealing of the structure using MACE.
+        Anneal the structure with the BKS/LAMMPS potential: initialise velocities at
+        T_ini and ramp the thermostat target linearly down to T_fin over `steps` MD
+        steps. Use T_ini > T_fin for a melt-and-quench.
         """
         print("Starting Anneal")
+        traj_interval = kwargs.pop('interval', 1)
 
-        # 0) Clear any existing dump file
-        if os.path.exists("dump.xyz"):
-            os.remove("dump.xyz")
+        atoms.calc = self._init_lmp_calculator(atoms)
 
-        # 1) Appointing MACE calculator:
-        calc = self._init_lmp_calculator(atoms)
-        atoms.calc = calc
-
-        # 2) Heating phase: High temperature equilibration
+        # Initialise velocities at the (hot) starting temperature; remove net COM drift
         MaxwellBoltzmannDistribution(atoms, temperature_K=T_ini)
-
-        # Remove center of mass motion
         atoms.set_momenta(
             atoms.get_momenta() - atoms.get_momenta().sum(axis=0) / len(atoms)
         )
 
-        # Set up MD integrator
         md = VelocityVerlet(atoms, dt * fs)
+        if traj_name:
+            self._attach_trajectory(md, atoms, traj_name, traj_fmt, interval=traj_interval)
 
-        temp_controller = TemperatureController(atoms, T_fin, tau=50)
-
-        for step in range(steps):
+        # Single monotonic schedule hot -> cold. The previous implementation held the
+        # target at T_fin for the whole "cooling" phase, so the structure was heated
+        # and never actually quenched.
+        controller = TemperatureController(atoms, T_ini, tau=50)
+        for target_temp in self._target_temperatures(steps, T_ini, T_fin):
+            controller.set_temperature(target_temp)
             md.run(1)
-            temp_controller.apply()
+            controller.apply()
 
-            # write dump file
-            if step % 10 == 0 and step != 0:
-                atoms.wrap()
-                atoms.write(
-                    "dump.xyz",
-                    format="xyz",
-                    append=True,
-                    comment=f"Step_heating: {step}",
-                )
-            
-        # 3) Cooling phase:
-        for step in range(steps):
-            # Calculate target temperature for this step
-            target_temp = linear_temperature_schedule(
-                step, steps, T_initial=T_fin, T_final=T_fin
-            )
-            temp_controller.set_temperature(target_temp)
-
-            md.run(1)
-            if step % 1 == 0 and step != 0:
-                atoms.wrap()
-                atoms.write(
-                    "dump.xyz",
-                    format="xyz",
-                    append=True,
-                    comment=f"Step_cooling: {step}",
-                )
-            temp_controller.apply()
-            
         return atoms
