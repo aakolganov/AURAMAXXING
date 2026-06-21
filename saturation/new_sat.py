@@ -92,13 +92,15 @@ def collect_over_or_under_cn_atoms(amorphous_struct: AmorphousStruc, do_under: b
 
     symbols = np.array(amorphous_struct.symbols)
     cn_dict = {at: [] for at in set(symbols)}
-    for sym, limit in amorphous_struct.min_cn.items():
+    # under-coordinated: CN below the minimum; over-coordinated: CN above the maximum.
+    limits = amorphous_struct.min_cn if do_under else amorphous_struct.max_cn
+    for sym, limit in limits.items():
         if sym not in symbols:
             continue
-        
+
         mask = (symbols == sym)
         mask &= (all_cn < limit) if do_under else (all_cn > limit)
-        
+
         cn_dict[sym].extend(np.where(mask)[0])
     return cn_dict
 
