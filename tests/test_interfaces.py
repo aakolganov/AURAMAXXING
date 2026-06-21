@@ -21,6 +21,25 @@ def test_lammps_anneal_schedule_cools(tmp_path):
     assert all(b <= a + 1e-9 for a, b in zip(temps, temps[1:]))
 
 
+def test_lmp_interface_is_a_calculator_interface(tmp_path):
+    # C3: LMPInterface should satisfy the CalculatorInterface contract.
+    from interfaces.LAMMPS_Interface import LMPInterface
+    from interfaces.base_interface import CalculatorInterface
+
+    calc = LMPInterface(dump_path=str(tmp_path / "d"))
+    assert isinstance(calc, CalculatorInterface)
+
+
+def test_uma_interface_module_imports():
+    # C2: UMA interface must import from the real interfaces package (it previously
+    # imported a non-existent auramaxxing.interfaces.base_interface). Needs torch.
+    pytest.importorskip("torch")
+    from interfaces.UMA_interface import UMAInterface
+    from interfaces.base_interface import CalculatorInterface
+
+    assert issubclass(UMAInterface, CalculatorInterface)
+
+
 @pytest.mark.lammps
 def test_lammps_anneal_runs_end_to_end(make_struct):
     """Real BKS MD: anneal completes and leaves finite geometry/energy."""

@@ -1,21 +1,15 @@
 from typing import Optional, Any
 import os
-from os import system as sys
-from typing import Union
-from ase.optimize import LBFGS, FIRE2
 from ase.calculators.lammpslib import LAMMPSlib
 from ase import Atoms
 from ase.constraints import FixAtoms
-
-from ase.io import read, write
 from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
 from ase.md.verlet import VelocityVerlet
-from ase.md.langevin import Langevin
 from ase.units import fs, kB
 import numpy as np
-from helpers.files_io import add_dump_to_traj
 from pathlib import Path
 
+from interfaces.base_interface import CalculatorInterface
 from default_constants import (
     bks_params,
     bks_lj,
@@ -62,7 +56,7 @@ class TemperatureController:
             self.atoms.set_velocities(velocities * scale_factor)
 
 
-class LMPInterface:
+class LMPInterface(CalculatorInterface):
     """
     Interface of geometry optimization with LAMMPS.
     """
@@ -138,84 +132,24 @@ class LMPInterface:
         return lmp_calc
 
 
-    def _attach_trajectory(self, run, atoms: Atoms, 
-                           filename: str, fmt: str = "xyz",
-                           interval: int = 1):
-        """
-        Attaches a modular trajectory writer to an optimizer or MD engine.
-        Handles both native ASE .traj files and appended text formats (like .xyz).
-        """
-        if not Path(self.dump_path).exists():
-            os.makedirs(self.dump_path)
-
-        full_filename = f"{filename}.{fmt}"
-        filepath = self.dump_path / full_filename
-        if Path(filepath).exists():
-            os.remove(filepath)
-        
-        def write_frame():
-            write(filepath, atoms, append=True, format=fmt)
-        run.attach(write_frame, interval=interval)
-
-
-    # def optimize(self, atoms: Atoms, max_steps: int = 450, frozen_atoms: Optional[list[int]]=None) -> float:
-    #     """
-    #     Optimization of the structure using MACE.
-
-    #     Parameters
-    #     ----------
-    #     atoms : ase.Atoms
-    #        Structure to optimize
-    #     max_steps : int, optional
-    #        max iterations, by default 150.
-
-    #     Returns
-    #     -------
-    #     energy : float
-    #         electronic energy of the optimized structure.
-    #     atoms: ase.Atoms
-    #         optimized geometry
-    #     """
-    #     calc = self._init_lmp_calculator(atoms)
-
-    #     # 1) Appointing MACE calculator:
-    #     atoms.calc = calc
-    #     if frozen_atoms is not None:
-    #         atoms.set_constraint(FixAtoms(indices=frozen_atoms))
-
-    #     # 2) Running L-BFGS optimizer:
-    #     opt = LBFGS(atoms, logfile=None)  # logfile=None,
-    #     opt.run(fmax=0.1, steps=max_steps)  # correct fmax if needed
-
-    #     # 3) getting the energy of the optimized structure:
-    #     try:
-    #         energy = atoms.get_potential_energy()  # output MACE-calculated energy
-    #     except Exception:
-    #         energy = float("nan")
-
-    #     return energy, atoms
-    
     def optimize(self, atoms: Atoms, fmax: float = 2.0, max_steps: int = 50,
-                 logfile: str = "log.log", traj_name: str | None = None, traj_fmt: str | None = None,
-                 frozen_atoms: Optional[list[int]]=None,
+                 logfile: str = "log.log", traj_name: Optional[str] = None,
+                 traj_fmt: Optional[str] = None,
+                 frozen_atoms: Optional[list] = None,
                  **kwargs: Any) -> Atoms:
         """
-        Optimize the geometry of the structure using BFGS.
+        Optimize the geometry with the BKS/LAMMPS potential. The LAMMPS calculator
+        is rebuilt for this structure (atom_types depend on which elements are
+        present), then the shared LBFGS/trajectory machinery of the base class runs.
         """
-        print("Starting Optimization")
-        traj_interval = kwargs.pop('interval', 1)
-
-        atoms.calc = self._init_lmp_calculator(atoms)
+        self.calc = self._init_lmp_calculator(atoms)
         if frozen_atoms is not None:
             atoms.set_constraint(FixAtoms(indices=frozen_atoms))
+        return super().optimize(
+            atoms, fmax=fmax, max_steps=max_steps, logfile=logfile,
+            traj_name=traj_name, traj_fmt=traj_fmt, **kwargs,
+        )
 
-        opt = LBFGS(atoms, logfile=self.dump_path/logfile, **kwargs)
-        if traj_name:
-            self._attach_trajectory(opt, atoms, traj_name, traj_fmt, interval=traj_interval)
-
-        opt.run(fmax=fmax, steps=max_steps)
-        return atoms
-    
 
     def _target_temperatures(self, steps: int, T_ini: float, T_fin: float) -> list:
         """Per-step thermostat target temperatures for a monotonic anneal ramp.
