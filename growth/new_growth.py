@@ -23,7 +23,7 @@ def grow_structure(
         os.makedirs(output_dir, exist_ok=True)
 
     if calculator is None:
-        calculator = ... # Choose some reasonable default later
+        raise ValueError("a calculator (CalculatorInterface) is required")
 
     num_placement_attempts = 0
     with tqdm(total=target_number_atoms, initial=len(amorphous_struct)) as pbar:
@@ -87,7 +87,7 @@ def finalize_structure(
     calculator: Optional[CalculatorInterface] = None
     ):
     if calculator is None:
-        calculator = ... # Choose some reasonable default later
+        raise ValueError("a calculator (CalculatorInterface) is required")
     
     initial_num_atoms = len(amorphous_struct)
     # calculator.anneal(

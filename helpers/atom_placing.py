@@ -1,7 +1,6 @@
 from base.amorphous_structure import AmorphousStruc, Limits
-from default_constants import d_min_max, sample_dist, default_max_cn, pair_cutoffs
+from default_constants import d_min_max
 import numpy as np
-from ase import Atom
 from scipy.spatial import cKDTree
 from scipy.ndimage import gaussian_filter
 
@@ -135,9 +134,13 @@ def place_atom_sphere(
     
     anchor_pos = amorphous_struct.atoms.positions[idx_anchor]
 
-    # 1. Generate all candidate points at once
+    # 1. Generate all candidate points at once, wrapped into the periodic cell so the
+    # Z-limit grid lookup and the periodic cKDTree query below both see in-box
+    # coordinates (otherwise boundary-crossing candidates are wrongly z-rejected and
+    # an out-of-box position could be committed). Assumes an orthogonal cell.
+    cell_dims = amorphous_struct.atoms.cell.cellpar()[:3]
     unit_sphere = fibonacci_sphere(num_samples)
-    candidates = anchor_pos + (unit_sphere * bond_length)
+    candidates = (anchor_pos + (unit_sphere * bond_length)) % cell_dims
 
     # 2. Filter candidates by Z-limits first (fast pre-filter)
     if hasattr(amorphous_struct, 'limits') and amorphous_struct.limits is not None:
@@ -148,9 +151,6 @@ def place_atom_sphere(
         return False # All points violated Z-limits
 
     # 3. Setup Spatial KDTree checks
-    # Assuming orthogonal cell for boxsize PBCs
-    cell_dims = amorphous_struct.atoms.cell.cellpar()[:3] 
-    
     symbols = np.array(amorphous_struct.atoms.get_chemical_symbols())
     positions = amorphous_struct.atoms.positions
     is_valid = np.ones(len(candidates), dtype=bool)
@@ -254,15 +254,16 @@ def place_atom_force(
     
     anchor_pos = amorphous_struct.atoms.positions[idx_anchor]
 
-    # 1. Generate all candidate points at once
+    # 1. Generate all candidate points at once, wrapped into the periodic cell so the
+    # periodic cKDTree query sees in-box coordinates and we never commit an
+    # out-of-box position. Assumes an orthogonal cell.
+    cell_dims = amorphous_struct.atoms.cell.cellpar()[:3]
     unit_sphere = fibonacci_sphere(num_samples)
-    candidates = anchor_pos + (unit_sphere * bond_length)
+    candidates = (anchor_pos + (unit_sphere * bond_length)) % cell_dims
 
-    cell_dims = amorphous_struct.atoms.cell.cellpar()[:3] 
-    
     symbols = np.array(amorphous_struct.atoms.get_chemical_symbols())
     positions = amorphous_struct.atoms.positions
-    
+
     # Track the minimum margin for each candidate.
     # Margin = distance_to_nearest_obstacle - exclusion_radius.
     # Positive margin = valid. Negative margin = overlap.

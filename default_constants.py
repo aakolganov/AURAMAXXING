@@ -18,7 +18,10 @@ sample_dist: Dict[str, RandomSample[str, Callable]] = {
 
     "O": RandomSample({
         "Si": uniform(loc=1.6, scale=0.32),
-        "O": burr12(c=68.50536301711077, d=0.4299182937422296, loc=-0.2260984913136991, scale=2.788587313802839),
+        # O-O is never sampled during growth (cation-anion attachment only); use a
+        # plain positive window matching d_min_max instead of the original fitted
+        # burr12 whose loc=-0.226 admitted negative distances.
+        "O": uniform(loc=2.05, scale=0.35),
         "Al": uniform(loc=1.8, scale=0.4)
     }),
     "Al": RandomSample({

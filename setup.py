@@ -4,6 +4,7 @@ setup(
     name='AURAMAXXING',
     version='',
     packages=['base', 'growth', 'helpers', 'interfaces', 'saturation'],
+    python_requires='>=3.10',
     url='',
     license='MIT',
     author='Alexander Kolganov',

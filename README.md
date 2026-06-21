@@ -10,7 +10,7 @@ Main Contributors:
 
 Installation & Dependencies
 
-1. Python 3.9+
+1. Python 3.10+
 2. ASE
 ```bash
 pip install ase
