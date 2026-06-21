@@ -1,0 +1,20 @@
+# Dedicated conda environment for AURAMAXXING.
+# Create with:  mamba env create -f environment.yml   (or: conda env create -f environment.yml)
+# Note: numpy must stay <2 — the conda-forge scipy/lammps are built against the numpy 1.x ABI,
+# and pip-installing mace-torch will try to pull numpy 2.x; reinstall `numpy<2` afterwards if so.
+name: auramaxxing
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy=1.26
+  - scipy
+  - ase
+  - networkx
+  - tqdm
+  - matplotlib
+  - lammps
+  - pip
+  - pip:
+      - torch~=2.7.0
+      - mace-torch~=0.3.13

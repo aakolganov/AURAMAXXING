@@ -1,0 +1,25 @@
+# Tooling configuration for AURAMAXXING.
+# (Packaging still lives in setup.py for now; this file only configures dev tools.)
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Put the repo root on sys.path so tests can `import base`, `import default_constants`, etc.
+# without installing the package (the source uses absolute top-level imports).
+pythonpath = ["."]
+addopts = "-q --strict-markers"
+markers = [
+    "lammps: integration test that requires a working LAMMPS python module (BKS growth path)",
+    "heavy: integration test that requires torch + MACE (saturation/finalize path)",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+extend-exclude = ["Legacy", "examples", "dump.txt"]
+
+[tool.ruff.lint]
+# Focus on real problems (undefined names, unused imports, mutable defaults, bad
+# comparisons), not whitespace noise. W-codes are left to the formatter. The CI lint
+# job is non-blocking for now; ratchet it to blocking once the legacy debt is cleared.
+select = ["F", "B", "E4", "E7", "E9"]
+ignore = ["E501"]  # line length is a formatter concern, not a CI failure

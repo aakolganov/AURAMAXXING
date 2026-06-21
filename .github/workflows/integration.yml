@@ -1,0 +1,50 @@
+name: integration
+
+# Heavy tiers: real calculators.
+#  - lammps: BKS growth path (conda-forge LAMMPS). Runs on PRs and nightly.
+#  - heavy:  torch + MACE saturation/finalize path. Nightly + manual only (slow/large).
+on:
+  pull_request:
+  schedule:
+    - cron: "0 3 * * *"   # 03:00 UTC nightly
+  workflow_dispatch:
+
+jobs:
+  lammps:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: auramaxxing-ci
+          # numpy pinned <2: conda-forge scipy/lammps are built against the numpy 1.x ABI.
+          create-args: >-
+            python=3.11 numpy=1.26 scipy ase networkx tqdm matplotlib lammps pytest
+          cache-environment: true
+      - name: Run LAMMPS integration tests
+        run: pytest -m lammps
+
+  heavy:
+    # Only nightly / manual — never on every PR (torch + MACE install is large and slow).
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: auramaxxing-ci-heavy
+          create-args: >-
+            python=3.11 numpy=1.26 scipy ase networkx tqdm matplotlib pytest
+          cache-environment: true
+      - name: Install torch + MACE (pip), then restore numpy<2
+        run: |
+          pip install "torch~=2.7.0" "mace-torch~=0.3.13"
+          pip install "numpy<2"
+      - name: Run heavy (MACE) integration tests
+        run: pytest -m heavy

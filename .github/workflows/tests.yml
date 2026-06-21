@@ -1,0 +1,47 @@
+name: tests
+
+# Fast tier: pure-Python / numpy / scipy / ase / networkx logic.
+# No LAMMPS, no torch, no MACE — runs in ~1 minute. Blocks merges.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install ruff
+      # Non-blocking for now: surfaces real issues (F/B/E7) without failing the build
+      # on pre-existing legacy debt. Remove continue-on-error to ratchet to blocking.
+      - name: ruff check
+        continue-on-error: true
+        run: ruff check .
+      - name: ruff format (check only)
+        continue-on-error: true
+        run: ruff format --check .
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install -r requirements-test.txt
+      - name: Run fast unit tests
+        run: pytest -m "not lammps and not heavy"

@@ -1,4 +1,6 @@
 numpy~=1.26.4
+scipy
+networkx
 ase~=3.24.0
 matplotlib~=3.10.0
 tqdm~=4.67.1
