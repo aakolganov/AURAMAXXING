@@ -59,6 +59,42 @@ def test_lammps_anneal_runs_end_to_end(make_struct):
 
 
 @pytest.mark.lammps
+def test_lammps_calculator_cached_and_invalidated(make_struct, tmp_path):
+    # Perf: the LAMMPS calculator is reused while element set + atom count are
+    # unchanged, and rebuilt when the structure changes (so it stays correct).
+    from interfaces.LAMMPS_Interface import LMPInterface
+
+    s = make_struct(["Si", "O", "O"], [[5, 5, 5], [6.6, 5, 5], [3.4, 5, 5]],
+                    cell=(15.0, 15.0, 15.0))
+    calc = LMPInterface(dump_path=str(tmp_path / "d"))
+
+    c1 = calc._init_lmp_calculator(s.atoms)
+    c2 = calc._init_lmp_calculator(s.atoms)
+    assert c1 is c2  # cache hit
+
+    s.commit_atom("H", [6.6, 6.0, 5.0])  # atom count changes
+    c3 = calc._init_lmp_calculator(s.atoms)
+    assert c3 is not c1  # cache invalidated
+
+
+@pytest.mark.lammps
+def test_lammps_optimize_twice_consistent(make_struct, tmp_path):
+    # Reusing the cached calculator across calls must still give sane results.
+    from interfaces.LAMMPS_Interface import LMPInterface
+
+    s = make_struct(["Si", "O", "O"], [[5, 5, 5], [6.6, 5, 5], [3.4, 5, 5]],
+                    cell=(15.0, 15.0, 15.0))
+    calc = LMPInterface(dump_path=str(tmp_path / "d"))
+
+    calc.optimize(s.atoms, fmax=1.0, max_steps=5)
+    e1 = s.atoms.get_potential_energy()
+    calc.optimize(s.atoms, fmax=1.0, max_steps=5)  # same size -> cache hit
+    e2 = s.atoms.get_potential_energy()
+
+    assert np.isfinite(e1) and np.isfinite(e2)
+
+
+@pytest.mark.lammps
 def test_lammps_optimize_runs(make_struct):
     pytest.importorskip("lammps")
     from interfaces.LAMMPS_Interface import LMPInterface

@@ -19,3 +19,17 @@ def test_mindistance_pushes_atoms_apart(make_struct):
     d_after = s.atoms.get_distance(0, 1, mic=True)
     assert changed is True
     assert d_after > d_before  # distance must increase, not shrink
+
+
+def test_mindistance_no_violation_returns_false(make_struct):
+    # Perf path: neighbor_list finds no pairs within min_dist -> no change.
+    from rules import MinimumDistanceRule
+
+    s = make_struct(["Si", "Si"], [[5.0, 5, 5], [9.0, 5, 5]], cell=(20.0, 20.0, 20.0))
+    pos_before = s.atoms.get_positions().copy()
+
+    rule = MinimumDistanceRule(min_dist=1.5, step_size=0.1)
+    changed = rule.apply(s.atoms, s.get_graph())
+
+    assert changed is False
+    assert (s.atoms.get_positions() == pos_before).all()

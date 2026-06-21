@@ -70,6 +70,10 @@ class LMPInterface(CalculatorInterface):
         self.dump_path = Path(dump_path)
         if not self.dump_path.exists():
             os.makedirs(self.dump_path)
+        # Cache the built LAMMPS calculator, invalidated when the structure's element
+        # set or atom count changes (see _init_lmp_calculator).
+        self._cached_calc = None
+        self._cached_key = None
 
     def _init_lmp_calculator(self, atoms: Atoms) -> LAMMPSlib:
         """
@@ -86,6 +90,14 @@ class LMPInterface(CalculatorInterface):
         lmp_calc : LAMMPSlib
            Initialized LAMMPS calculator
         """
+        # Reuse the cached calculator when the element set and atom count are
+        # unchanged (e.g. the repeated finalize/optimize calls on one structure).
+        # We key on atom count too because a reused LAMMPSlib instance is only safe
+        # for a fixed system size, so growth (which adds atoms) always rebuilds.
+        cache_key = (tuple(sorted(set(atoms.get_chemical_symbols()))), len(atoms))
+        if self._cached_calc is not None and self._cached_key == cache_key:
+            return self._cached_calc
+
         unique_atom_types = np.unique(atoms.get_chemical_symbols())
         atom_types = {atom_type: i+1 for i, atom_type in enumerate(unique_atom_types)}
         atom_type_masses = {atom_type: default_masses[atom_type] for atom_type in atom_types.keys()}
@@ -129,6 +141,8 @@ class LMPInterface(CalculatorInterface):
             atom_types=atom_types,
             atom_type_masses=atom_type_masses,
         )
+        self._cached_calc = lmp_calc
+        self._cached_key = cache_key
         return lmp_calc
 
 
