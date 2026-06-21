@@ -1,6 +1,4 @@
 from base.amorphous_structure import AmorphousStruc
-from interfaces.base_interface import CalculatorInterface
-from typing import Optional
 import numpy as np
 from helpers.files_io import highlight_coordination
 from ase.geometry import find_mic
@@ -72,7 +70,8 @@ def move_atom(
         displacements = np.zeros_like(pos)
         for n_idx in neighbors:
             vec_mn, dist_mn = find_mic(pos[n_idx] - pos[idx_move], cell, pbc)
-            if dist_mn < 1e-6: continue
+            if dist_mn < 1e-6:
+                continue
             error = dist_mn - original_distances[n_idx]
             disp_n = (-vec_mn / dist_mn) * error * alpha
             displacements[n_idx] += disp_n
@@ -167,7 +166,6 @@ def saturate_under_coordinated(
             if saturate_with_OH:
                 try_then_force_place("O", attach_idx)
                 attach_idx = len(amorphous_struct) - 1 # to account for the 0 index
-            print(amorphous_struct.atoms[attach_idx].symbol)
             try_then_force_place("H", attach_idx)
 
 
@@ -212,6 +210,5 @@ def correct_charge(
         current_charge = amorphous_struct.charge()
 
     amorphous_struct.sort_atoms()
-    amorphous_struct.atoms.write("before_opt.vasp", format="vasp")
 
     
