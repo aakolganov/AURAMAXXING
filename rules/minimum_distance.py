@@ -31,13 +31,18 @@ class MinimumDistanceRule(AlterationRule):
             match_2 = (self.e1 is None or sym_b == self.e1) and (self.e2 is None or sym_a == self.e2)
             
             if match_1 or match_2:
-                # Calculate vector and push apart
+                # vec points from A to B (r_b - r_a); push the two atoms apart
+                # symmetrically, half a step each.
                 vec = atoms.get_distance(idx_a, idx_b, vector=True, mic=True)
                 norm = np.linalg.norm(vec)
-                
-                # Nudge atom A away from atom B
-                push_vector = (vec / norm) * self.step
-                atoms.positions[idx_a] += push_vector
+                if norm < 1e-9:
+                    # Coincident atoms: pick an arbitrary fixed direction to separate them.
+                    vec = np.array([1.0, 0.0, 0.0])
+                    norm = 1.0
+
+                half_step = (vec / norm) * (self.step / 2.0)
+                atoms.positions[idx_a] -= half_step  # A moves away from B
+                atoms.positions[idx_b] += half_step  # B moves away from A
                 return True
                 
         return False
