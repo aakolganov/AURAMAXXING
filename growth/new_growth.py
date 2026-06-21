@@ -61,10 +61,11 @@ def grow_structure(
                 write_structure_to_file(amorphous_struct, output_dir/f"dump_{num_placement_attempts}", write_xyz=True)
 
             else:
+                # Melt-and-quench to relieve the steric jam: start hot, cool to ~RT.
                 calculator.anneal(
-                    amorphous_struct.atoms, 
-                    T_ini=1000,
-                    T_fin=2000,
+                    amorphous_struct.atoms,
+                    T_ini=2000,
+                    T_fin=300,
                     steps=250,
                     interval=10,
                     logfile="log.log",

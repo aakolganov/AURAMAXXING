@@ -1,0 +1,10 @@
+# Fast-tier (no LAMMPS / torch / MACE) dependencies for running the unit test suite.
+# Used by the GitHub Actions "fast" job and for local `pytest -m "not lammps and not heavy"`.
+numpy<2
+scipy
+ase
+networkx
+tqdm
+matplotlib
+pytest
+ruff
