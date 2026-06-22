@@ -18,6 +18,12 @@ from default_constants import (
     ev_to_kcal,
 )
 
+# conda-forge LAMMPS is built with MPI; on macOS its libfabric/OFI provider can
+# fail while probing a network interface at MPI_Finalize, aborting the process on
+# exit (exit code 143) even though the calculation finished. The TCP provider uses
+# loopback and tears down cleanly. setdefault so an explicit user setting wins.
+os.environ.setdefault("FI_PROVIDER", "tcp")
+
 # helper functions to setup annealing procedure
 
 
