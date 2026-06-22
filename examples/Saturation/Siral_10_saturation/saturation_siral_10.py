@@ -16,9 +16,24 @@ from saturation.new_sat import saturate_under_coordinated, correct_charge
 from growth.new_growth import finalize_structure
 
 
-def main():
-    struct = initialize_structure_file("POSCAR_Siral_10", ase_read_kwargs={})
+def saturate(struct, calc, out_path):
+    """Saturate one structure with the given (already-built) MACE calculator."""
+    # 1) add H / OH to under-coordinated atoms, then relax
+    saturate_under_coordinated(struct)
+    finalize_structure(struct, calculator=calc)
 
+    # 2) make the surface charge-neutral, then relax again
+    correct_charge(struct)
+    finalize_structure(struct, calculator=calc)
+
+    struct.atoms.write(out_path, format="vasp")
+
+
+if __name__ == "__main__":
+    # Build the MACE calculator once and reuse it for every structure you saturate
+    # (loading the model is expensive). To batch many POSCARs, loop here and call
+    # saturate(struct, calc, out) for each, passing the same `calc`.
+    #
     # NOTE on MPS: MACEInterface loads the model in float32 (MACE checkpoints are
     # often float64, which MPS cannot load directly, so it casts on CPU first).
     # mace-torch 0.3.16's forward still computes some terms in float64, which MPS
@@ -31,16 +46,5 @@ def main():
         dump_path="dump_mace",
     )
 
-    # 1) add H / OH to under-coordinated atoms, then relax
-    saturate_under_coordinated(struct)
-    finalize_structure(struct, calculator=calc)
-
-    # 2) make the surface charge-neutral, then relax again
-    correct_charge(struct)
-    finalize_structure(struct, calculator=calc)
-
-    struct.atoms.write("dump_mace/saturated_siral_10.vasp", format="vasp")
-
-
-if __name__ == "__main__":
-    main()
+    struct = initialize_structure_file("POSCAR_Siral_10", ase_read_kwargs={})
+    saturate(struct, calc, "dump_mace/saturated_siral_10.vasp")
