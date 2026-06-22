@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from default_constants import sample_dist
-from helpers.atom_placing import place_atom_sphere, place_atom_most_z_space, slice_structure
+from helpers.atom_placing import place_atom_sphere, place_atom_most_z_space, slice_structure, build_placement_cache
 from interfaces.base_interface import CalculatorInterface
 from base import AmorphousStruc
 from helpers.atom_picker import pick_next_atom_type, choose_atom_idx_to_attach_to
@@ -45,6 +45,11 @@ def grow_structure(
             
             idx_connect_to = choose_atom_idx_to_attach_to(amorphous_struct, atom_to_add)
 
+            # Nothing is committed until a placement succeeds, so the structure is
+            # fixed across these attempts: build the collision trees once and reuse
+            # them for every anchor we try instead of rebuilding on each attempt.
+            placement_cache = build_placement_cache(amorphous_struct)
+
             MAX_ITER, current_iter = 100, 0
             placement_success = False
             excluded_idx = []
@@ -56,6 +61,7 @@ def grow_structure(
                     atom_to_add,
                     idx_connect_to,
                     bond_length,
+                    cache=placement_cache,
                     )
                 if not placement_success:
                     excluded_idx.append(idx_connect_to)

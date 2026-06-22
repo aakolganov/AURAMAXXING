@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 from base.amorphous_structure import AmorphousStruc, Limits
 from default_constants import d_min_max
 import numpy as np
@@ -100,10 +102,15 @@ def within_z_limits(trial_coord: np.ndarray, limits: Limits) -> bool:
 #     return True
 
 
+@lru_cache(maxsize=None)
 def fibonacci_sphere(samples: int = 100) -> np.ndarray:
     """
     Generates evenly distributed points on a unit sphere.
     Returns an array of shape (samples, 3).
+
+    The result depends only on ``samples`` and is reused every placement attempt,
+    so it is memoized. Callers must treat the returned array as read-only (they
+    only ever scale a copy of it), so the shared cached array is never mutated.
     """
     points = []
     phi = np.pi * (3.0 - np.sqrt(5.0))  # Golden angle
@@ -120,25 +127,56 @@ def fibonacci_sphere(samples: int = 100) -> np.ndarray:
     return np.array(points)
 
 
+def build_placement_cache(amorphous_struct: AmorphousStruc) -> tuple:
+    """Precompute per-element periodic cKDTrees for collision checks.
+
+    Returns ``(cell_dims, trees)`` where ``trees`` maps each element present to a
+    ``(cKDTree, global_index_array)`` pair built over that element's wrapped
+    positions. The cache is valid only while the structure is unchanged (no atom
+    added, removed or moved); reuse it across repeated placement attempts on the
+    same structure to avoid rebuilding the trees on every attempt -- the growth
+    retry loop tries many anchors against an otherwise-fixed structure.
+    Assumes an orthogonal cell.
+    """
+    cell_dims = amorphous_struct.atoms.cell.cellpar()[:3]
+    symbols = np.array(amorphous_struct.atoms.get_chemical_symbols())
+    positions = amorphous_struct.atoms.positions % cell_dims
+    trees = {}
+    for element in np.unique(symbols):
+        idx_global = np.where(symbols == element)[0]
+        trees[element] = (cKDTree(positions[idx_global], boxsize=cell_dims), idx_global)
+    return cell_dims, trees
+
+
 def place_atom_sphere(
         amorphous_struct: AmorphousStruc,
         atom_type: str,
         idx_anchor: int,
         bond_length: float,
-        num_samples: int = 100
+        num_samples: int = 100,
+        cache: tuple | None = None,
     ) -> bool:
     """
-    Placement with simultaneous spherical 
+    Placement with simultaneous spherical
     sampling and KDTree collision detection.
+
+    Pass ``cache`` (from ``build_placement_cache``) to reuse the per-element
+    collision trees across attempts on an unchanged structure; otherwise one is
+    built for this call.
     """
-    
+
+    # Per-element collision trees: reuse the caller's cache (structure is fixed
+    # across repeated attempts on the same anchor) or build one for this call.
+    if cache is None:
+        cache = build_placement_cache(amorphous_struct)
+    cell_dims, trees = cache
+
     anchor_pos = amorphous_struct.atoms.positions[idx_anchor]
 
     # 1. Generate all candidate points at once, wrapped into the periodic cell so the
     # Z-limit grid lookup and the periodic cKDTree query below both see in-box
     # coordinates (otherwise boundary-crossing candidates are wrongly z-rejected and
     # an out-of-box position could be committed). Assumes an orthogonal cell.
-    cell_dims = amorphous_struct.atoms.cell.cellpar()[:3]
     unit_sphere = fibonacci_sphere(num_samples)
     candidates = (anchor_pos + (unit_sphere * bond_length)) % cell_dims
 
@@ -150,42 +188,36 @@ def place_atom_sphere(
     if len(candidates) == 0:
         return False # All points violated Z-limits
 
-    # 3. Setup Spatial KDTree checks
-    symbols = np.array(amorphous_struct.atoms.get_chemical_symbols())
-    positions = amorphous_struct.atoms.positions
+    # 3. Spatial collision checks against the cached per-element trees
+    anchor_symbol = amorphous_struct.atoms[idx_anchor].symbol
     is_valid = np.ones(len(candidates), dtype=bool)
 
-    # Group by unique elements to minimize tree builds
-    for element in np.unique(symbols):
-        
-        # Exact translation of your 'is_correlty_positions' logic:
+    for element, (tree, idx_global) in trees.items():
+
+        # Exact translation of the original 'is_correlty_positions' logic:
         if element == atom_type:
             # If same element, anything under dmax is bad (covers both too_close and mid_bad)
-            exclusion_radius = d_min_max[element][atom_type][1] 
+            exclusion_radius = d_min_max[element][atom_type][1]
         else:
             # If different element, only too_close (< dmin) is bad
-            exclusion_radius = d_min_max[element][atom_type][0] 
+            exclusion_radius = d_min_max[element][atom_type][0]
 
-        # Mask and fetch positions for this element
-        elem_mask = (symbols == element)
-        elem_mask[idx_anchor] = False # CRITICAL: Don't check against the anchor!
-        obs_pos = positions[elem_mask]
-
-        if len(obs_pos) == 0:
-            continue
-
-        # Ensure positions are wrapped within the box for cKDTree
-        obs_pos = obs_pos % cell_dims
-
-        # Build tree with PBCs applied
-        tree = cKDTree(obs_pos, boxsize=cell_dims)
-        
         # Query all candidates simultaneously
         collisions = tree.query_ball_point(candidates, r=exclusion_radius)
-        
-        # Invalidate candidates that hit an obstacle
+
+        # CRITICAL: never count the anchor as a clash -- it is the atom we are
+        # bonding to. It only appears in its own element's tree, so locate it
+        # there and drop it from the hit lists for that element.
+        anchor_local = None
+        if element == anchor_symbol:
+            anchor_local = int(np.searchsorted(idx_global, idx_anchor))
+
+        # Invalidate candidates that hit an obstacle (other than the anchor)
         for i, cols in enumerate(collisions):
-            if len(cols) > 0:
+            if anchor_local is not None:
+                if any(c != anchor_local for c in cols):
+                    is_valid[i] = False
+            elif len(cols) > 0:
                 is_valid[i] = False
 
     # 4. Filter to only the candidates that passed all checks
@@ -197,8 +229,7 @@ def place_atom_sphere(
     # 5. Pick a valid placement and commit
     chosen_idx = amorphous_struct.rng.choice(len(final_candidates))
     chosen_pos = final_candidates[chosen_idx]
-    
-    # Note: Use the argument name your commit_atom method expects (e.g., position=chosen_pos)
+
     amorphous_struct.commit_atom(atom_type, position=chosen_pos)
     return True
 
