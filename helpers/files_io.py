@@ -27,11 +27,12 @@ def highlight_coordination(amorphous_struct, output_file: str) -> None:
     amorphous_struct.sort_atoms()
     atoms_copy: Atoms = amorphous_struct.atoms.copy()
     numbers = atoms_copy.get_atomic_numbers()
+    # Per-atom targets so a tagged Al is compared against its own max CN.
+    target_cns = amorphous_struct.max_cn_array()
 
     for i, atom in enumerate(atoms_copy):
-        symbol = atom.symbol
-        if symbol in amorphous_struct.max_cn:
-            target_cn = amorphous_struct.max_cn[symbol]
+        if atom.symbol in amorphous_struct.max_cn:
+            target_cn = target_cns[i]
             current_cn = amorphous_struct.get_cn(i)
             if current_cn < target_cn:
                 numbers[i] -= 1

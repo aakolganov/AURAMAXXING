@@ -9,9 +9,14 @@ from pathlib import Path
 import numpy as np
 
 from base.initialize import initialize_structure_blank
+from base.config import CoordinationConfig
 from base.limits import make_limit_flat, make_limits_fourier, fix_limits
 from growth.new_growth import grow_structure, finalize_structure
 from interfaces.LAMMPS_Interface import LMPInterface
+from default_constants import SIRAL_OVERCOORD
+
+# Allow ~20% of Al to grow octahedral (CN up to 6); the rest stay tetrahedral (CN 4).
+COORD_CONFIG = CoordinationConfig(overcoord_policy=SIRAL_OVERCOORD)
 
 # 2 Si : 1 Al, with O for a charge-neutral oxide: 2*Si(+4) + 1*Al(+3) = +11 -> 5.5 O.
 # Scaled to integers: Si:4, Al:2, O:11 (target_ratios are relative weights).
@@ -22,7 +27,7 @@ ALPHAS = np.logspace(-2, 0, 4)
 
 
 def generate(alpha: float, seed: int, out_dir: Path) -> None:
-    struct = initialize_structure_blank(cell=CELL)
+    struct = initialize_structure_blank(cell=CELL, config=COORD_CONFIG)
     struct.set_seed(seed)
 
     make_limit_flat(struct, z_val=12.0, is_for="bottom")

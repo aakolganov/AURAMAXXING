@@ -12,12 +12,18 @@ from helpers.atom_picker import pick_next_atom_type, choose_atom_idx_to_attach_t
 from base.limits import move_limits
 from helpers.files_io import write_structure_to_file
 
+DEFAULT_ANNEAL_PARAMS = {"T_ini": 2000, "T_fin": 300, "steps": 250, "interval": 10}
+
+
 def grow_structure(
         amorphous_struct: AmorphousStruc,
         target_number_atoms: int,
         target_ratios: dict[str, float],
         calculator: Optional[CalculatorInterface] = None,
         max_placement_attempts: int = 1000,
+        per_anchor_attempts: int = 100,
+        num_samples: int = 100,
+        anneal_params: Optional[dict] = None,
         output_dir: Path = Path("growth")
     ):
     if not output_dir.exists():
@@ -25,6 +31,10 @@ def grow_structure(
 
     if calculator is None:
         raise ValueError("a calculator (CalculatorInterface) is required")
+
+    # Melt-and-quench schedule used to relieve steric jams (override per call).
+    if anneal_params is None:
+        anneal_params = DEFAULT_ANNEAL_PARAMS
 
     # Bond lengths are drawn from scipy distributions (sample_dist), whose .rvs()
     # uses numpy's global RNG. Seed it from the structure's seeded generator so a
@@ -52,10 +62,10 @@ def grow_structure(
 
             idx_connect_to = choose_atom_idx_to_attach_to(amorphous_struct, atom_to_add, all_cn=all_cn)
 
-            MAX_ITER, current_iter = 100, 0
+            current_iter = 0
             placement_success = False
             excluded_idx = []
-            while current_iter <= MAX_ITER and not placement_success:
+            while current_iter <= per_anchor_attempts and not placement_success:
                 current_iter += 1
                 bond_length = sample_dist[amorphous_struct.atoms[idx_connect_to].symbol][atom_to_add]
                 placement_success = place_atom_sphere(
@@ -63,6 +73,7 @@ def grow_structure(
                     atom_to_add,
                     idx_connect_to,
                     bond_length,
+                    num_samples=num_samples,
                     cache=placement_cache,
                     )
                 if not placement_success:
@@ -78,13 +89,10 @@ def grow_structure(
                 # Melt-and-quench to relieve the steric jam: start hot, cool to ~RT.
                 calculator.anneal(
                     amorphous_struct.atoms,
-                    T_ini=2000,
-                    T_fin=300,
-                    steps=250,
-                    interval=10,
                     logfile="log.log",
                     traj_name="traj",
                     traj_fmt="xyz",
+                    **anneal_params,
                     )
 
                 slice_structure(amorphous_struct)
@@ -98,28 +106,22 @@ def grow_structure(
 
 def finalize_structure(
     amorphous_struct: AmorphousStruc,
-    calculator: Optional[CalculatorInterface] = None
+    calculator: Optional[CalculatorInterface] = None,
+    fmax: float = 0.1,
+    max_steps: int = 500,
+    traj_interval: int = 1,
     ):
     if calculator is None:
         raise ValueError("a calculator (CalculatorInterface) is required")
-    
+
     initial_num_atoms = len(amorphous_struct)
-    # calculator.anneal(
-    #     amorphous_struct.atoms, 
-    #     T_ini=2000,
-    #     T_fin=300,
-    #     steps=5000,
-    #     interval=100,
-    #     traj_name="final_md",
-    #     traj_fmt="xyz",
-    #     )
     calculator.optimize(
         amorphous_struct.atoms,
-        fmax=0.1,
-        max_steps=500,
+        fmax=fmax,
+        max_steps=max_steps,
         traj_name="final_opt",
         traj_fmt="xyz",
-        interval=1
+        interval=traj_interval
     )
     # Drop any leftover MD velocities (set by a growth-time anneal) so the finalized
     # structure is static and is written without a spurious velocity block.

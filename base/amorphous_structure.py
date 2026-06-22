@@ -8,8 +8,16 @@ from numpy.typing import ArrayLike
 from ase.neighborlist import neighbor_list
 import networkx as nx
 from collections import Counter
-from default_constants import default_max_cn, pair_cutoffs, OXIDATION_POS, OXIDATION_NEG, default_min_cn
+from default_constants import (
+    default_max_cn,
+    pair_cutoffs,
+    OXIDATION_POS,
+    OXIDATION_NEG,
+    default_min_cn,
+    default_overcoord_policy,
+)
 from .limits import Limits
+from .config import CoordinationConfig
 
 @dataclass
 class AmorphousStruc:
@@ -17,6 +25,7 @@ class AmorphousStruc:
     max_cn: dict = field(default_factory=default_max_cn.copy)
     min_cn: dict = field(default_factory=default_min_cn.copy)
     cut_offs: dict = field(default_factory=pair_cutoffs.copy)
+    overcoord_policy: dict = field(default_factory=default_overcoord_policy.copy)
     rng: np.random.Generator = field(default_factory=np.random.default_rng)
     limits: Limits = field(default=None, init=False, repr=False)
     
@@ -72,6 +81,63 @@ class AmorphousStruc:
         return np.array([degrees[i] for i in range(len(self.atoms))])
 
 
+    def max_cn_array(self) -> np.ndarray:
+        """Per-atom maximum coordination number.
+
+        Combines the per-element ``max_cn`` defaults with any per-atom overrides
+        stored in ``atoms.arrays["max_cn"]`` (set by the overcoordination policy).
+        A stored value of 0 means "unset" and falls back to the element default, so
+        ASE's zero-padding of freshly appended atoms is harmless. When no overrides
+        exist the result is exactly the per-element defaults (back-compatible).
+        """
+        symbols = np.array(self.symbols)
+        base = np.array([self.max_cn[s] for s in symbols], dtype=int)
+        override = self.atoms.arrays.get("max_cn")
+        if override is None:
+            return base
+        return np.where(override > 0, override, base)
+
+
+    def min_cn_array(self) -> np.ndarray:
+        """Per-atom minimum coordination number (per-element only).
+
+        The overcoordination policy relaxes the upper bound only; the
+        under-coordination floor that drives saturation stays per-element.
+        """
+        symbols = np.array(self.symbols)
+        return np.array([self.min_cn[s] for s in symbols], dtype=int)
+
+
+    def _assign_max_cn(self, symbol: str) -> int:
+        """Draw a per-atom max-CN override for a newly created atom.
+
+        Returns the elevated max with probability ``fraction`` (Bernoulli draw on
+        ``self.rng``), else 0 (use the element default). Short-circuits with NO rng
+        draw when the policy is empty or has no entry for ``symbol`` -- this is what
+        keeps policy-off runs byte-for-byte identical to before.
+        """
+        policy = self.overcoord_policy.get(symbol)
+        if not policy or policy.get("fraction", 0.0) <= 0.0:
+            return 0
+        if self.rng.random() < policy["fraction"]:
+            return int(policy["max_cn"])
+        return 0
+
+
+    def apply_overcoord_policy(self) -> None:
+        """(Re)assign per-atom max-CN overrides for all current atoms.
+
+        Tags every atom via the Bernoulli policy and stores the result in
+        ``atoms.arrays["max_cn"]``. No-op when the policy is empty. Use this to opt
+        a loaded structure into the policy after seeding (``set_seed``); grown atoms
+        are tagged incrementally in ``commit_atom`` instead.
+        """
+        if not self.overcoord_policy:
+            return
+        arr = np.array([self._assign_max_cn(s) for s in self.symbols], dtype=int)
+        self.atoms.set_array("max_cn", arr)
+
+
     def get_atom_count(self, atom_type: str) -> int:
         """counts atoms of certain type"""
         return self.atoms.get_chemical_symbols().count(atom_type)
@@ -87,6 +153,17 @@ class AmorphousStruc:
         """
         self.atoms.append(Atom(atom_type, position=position))
         new_idx = len(self.atoms) - 1
+
+        # Tag the new atom with its max-CN override per the overcoordination policy.
+        # ASE pads an existing per-atom array with 0 on append, so we overwrite that
+        # slot; if the array doesn't exist yet (e.g. first atom of a blank struct) we
+        # create it. Guarded by a non-empty policy so policy-off runs are unchanged.
+        if self.overcoord_policy:
+            tag = self._assign_max_cn(atom_type)
+            if "max_cn" not in self.atoms.arrays:
+                self.atoms.set_array("max_cn", np.zeros(len(self.atoms), dtype=int))
+            self.atoms.arrays["max_cn"][new_idx] = tag
+
         if self._graph is not None and not self._need_graph_update:
             self._add_atom_to_graph(new_idx)
         else:
@@ -112,6 +189,13 @@ class AmorphousStruc:
 
     def replace_atom(self, new_atom_type: str, new_position: np.ndarray, index: int) -> None:
         """Simple wrap to replace an atom and trigger a graph update."""
+        # If the element changes, drop any per-atom max-CN override so a stale tag
+        # (e.g. an Al allowed CN 6) can't carry over to a different element. 0 falls
+        # back to the new element's default. (Today move_atom only replaces in place
+        # with the same symbol, so this is defensive.)
+        override = self.atoms.arrays.get("max_cn")
+        if override is not None and self.atoms[index].symbol != new_atom_type:
+            override[index] = 0
         self.atoms.positions[index] = new_position
         self.atoms.numbers[index] = atomic_numbers[new_atom_type]
         self._need_graph_update = True
@@ -199,6 +283,7 @@ def AmorphousStruc_factory(
     cell: Optional[ArrayLike] = None,
     pbc: Union[bool, Sequence[bool]] = False,
     seed: Optional[Union[int, np.random.Generator]] = None,
+    config: Optional[CoordinationConfig] = None,
 ) -> AmorphousStruc:
     """
     Factory to create an AmorphousStruc object from either an existing
@@ -210,6 +295,10 @@ def AmorphousStruc_factory(
 
     If 'atoms' is provided, other arguments (symbols, positions, etc.) are ignored.
     If neither is provided, an empty structure is created.
+
+    `config` (CoordinationConfig) sets the coordination limits, cutoffs and the
+    overcoordination policy. When omitted, the AmorphousStruc field defaults apply,
+    reproducing the previous behaviour.
     """
     # If the user passes in a Generator, use it; otherwise build one from the seed.
     if isinstance(seed, np.random.Generator):
@@ -236,4 +325,13 @@ def AmorphousStruc_factory(
         # Create an empty Atoms object if no inputs are given
         atoms_obj = Atoms(cell=cell, pbc=pbc)
 
-    return AmorphousStruc(atoms=atoms_obj, rng=rng)
+    kwargs = {}
+    if config is not None:
+        kwargs.update(
+            max_cn=config.max_cn.copy(),
+            min_cn=config.min_cn.copy(),
+            cut_offs=config.cut_offs.copy(),
+            overcoord_policy=config.overcoord_policy.copy(),
+        )
+
+    return AmorphousStruc(atoms=atoms_obj, rng=rng, **kwargs)

@@ -15,10 +15,10 @@ def choose_atom_idx_to_attach_to(amorphous_struct: AmorphousStruc, atom_type: st
     # Determine which atom types are valid to attach to
     allowed_attachment_atoms = OXIDATION_NEG.keys() if atom_type in OXIDATION_POS else OXIDATION_POS.keys()
 
-    # Build a mask of saturated atoms
-    is_saturated = np.zeros(len(symbols), dtype=bool)
-    for sym, max_cn in amorphous_struct.max_cn.items():
-        is_saturated[symbols == sym] = all_cn[symbols == sym] >= max_cn
+    # Build a mask of saturated atoms. max_cn_array() is per-atom: it honours any
+    # overcoordination overrides (e.g. an Al allowed CN 6) and falls back to the
+    # per-element max_cn otherwise.
+    is_saturated = all_cn >= amorphous_struct.max_cn_array()
 
     # Candidates are atoms of allowed types that are not saturated
     cand = np.where(np.isin(symbols, list(allowed_attachment_atoms)) & ~is_saturated)[0]

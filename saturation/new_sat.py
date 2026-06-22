@@ -91,15 +91,12 @@ def collect_over_or_under_cn_atoms(amorphous_struct: AmorphousStruc, do_under: b
 
     symbols = np.array(amorphous_struct.symbols)
     cn_dict = {at: [] for at in set(symbols)}
-    # under-coordinated: CN below the minimum; over-coordinated: CN above the maximum.
-    limits = amorphous_struct.min_cn if do_under else amorphous_struct.max_cn
-    for sym, limit in limits.items():
-        if sym not in symbols:
-            continue
-
-        mask = (symbols == sym)
-        mask &= (all_cn < limit) if do_under else (all_cn > limit)
-
+    # under-coordinated: CN below the (per-element) minimum; over-coordinated: CN above
+    # the per-atom maximum (so an Al allowed CN 6 isn't flagged over until CN > 6).
+    limits = amorphous_struct.min_cn_array() if do_under else amorphous_struct.max_cn_array()
+    flagged = (all_cn < limits) if do_under else (all_cn > limits)
+    for sym in set(symbols):
+        mask = (symbols == sym) & flagged
         cn_dict[sym].extend(np.where(mask)[0])
     return cn_dict
 
@@ -131,20 +128,22 @@ def find_tetrogonal_sites(amorphous_struct: AmorphousStruc) -> list[int]:
 
     all_cn = amorphous_struct.get_cn()
     symbols = np.array(amorphous_struct.symbols)
+    # Per-atom bounds so a tagged Al (max 6) counts as variable-CN up to CN 6.
+    min_arr = amorphous_struct.min_cn_array()
+    max_arr = amorphous_struct.max_cn_array()
     found_indices = []
 
     for sym in variable_cn_types:
-        min_c = amorphous_struct.min_cn[sym]
-        max_c = amorphous_struct.max_cn[sym]
-        mask = (symbols == sym) & (all_cn > min_c) & (all_cn <= max_c)
+        mask = (symbols == sym) & (all_cn > min_arr) & (all_cn <= max_arr)
         found_indices.extend(np.where(mask)[0].tolist())
-        
+
     return found_indices
 
 
 def saturate_under_coordinated(
         amorphous_struct: AmorphousStruc,
         bond_lengths=None,
+        num_samples: int = 250,
     ):
     """ Does the basic saturation of atoms through adding OH to positively charged and H to negatively charged. Does not Optimize structure."""
     if bond_lengths is None:
@@ -156,9 +155,9 @@ def saturate_under_coordinated(
 
 
     def try_then_force_place(place_atom: str, attach_idx: int):
-        is_placed = place_atom_sphere(amorphous_struct, atom_type=place_atom, idx_anchor=attach_idx, num_samples=250, bond_length=bond_lengths[place_atom])
+        is_placed = place_atom_sphere(amorphous_struct, atom_type=place_atom, idx_anchor=attach_idx, num_samples=num_samples, bond_length=bond_lengths[place_atom])
         if not is_placed:
-            is_placed = place_atom_force(amorphous_struct, atom_type=place_atom, idx_anchor=attach_idx, num_samples=250, bond_length=bond_lengths[place_atom])
+            is_placed = place_atom_force(amorphous_struct, atom_type=place_atom, idx_anchor=attach_idx, num_samples=num_samples, bond_length=bond_lengths[place_atom])
 
     for sym, idx_list in undr_cn.items():
         saturate_with_OH = sym in OXIDATION_POS
@@ -173,6 +172,8 @@ def correct_charge(
         amorphous_struct: AmorphousStruc,
         bond_lengths=None,
         max_iterations: int = 1000,
+        num_samples: int = 250,
+        move_alpha: float = 0.5,
     ):
     """ Creates a charge neutral surface through adding H and OH until correct. Add to over-coordinated atoms. Does not Optimize structure.
 
@@ -184,9 +185,9 @@ def correct_charge(
     if bond_lengths is None:
         bond_lengths = DEFAULT_SAT_BOND_LENGTHS
     def try_then_force_place(place_atom: str, attach_idx: int):
-        is_placed = place_atom_sphere(amorphous_struct, atom_type=place_atom, idx_anchor=attach_idx, num_samples=250, bond_length=bond_lengths[place_atom])
+        is_placed = place_atom_sphere(amorphous_struct, atom_type=place_atom, idx_anchor=attach_idx, num_samples=num_samples, bond_length=bond_lengths[place_atom])
         if not is_placed:
-            is_placed = place_atom_force(amorphous_struct, atom_type=place_atom, idx_anchor=attach_idx, num_samples=250, bond_length=bond_lengths[place_atom])
+            is_placed = place_atom_force(amorphous_struct, atom_type=place_atom, idx_anchor=attach_idx, num_samples=num_samples, bond_length=bond_lengths[place_atom])
 
     current_charge = amorphous_struct.charge()
     iteration = 0
@@ -212,10 +213,11 @@ def correct_charge(
 
         chosen_idx_pos, idx_furthest = select_idx_for_move(amorphous_struct, indices)
         move_atom(
-            amorphous_struct, 
-            idx_move=chosen_idx_pos, 
-            move_away_from=idx_furthest, 
-            dist_move=d_min_max[amorphous_struct.atoms[chosen_idx_pos].symbol][amorphous_struct.atoms[idx_furthest].symbol][0]+0.2
+            amorphous_struct,
+            idx_move=chosen_idx_pos,
+            move_away_from=idx_furthest,
+            dist_move=d_min_max[amorphous_struct.atoms[chosen_idx_pos].symbol][amorphous_struct.atoms[idx_furthest].symbol][0]+0.2,
+            alpha=move_alpha,
             )
         
         attach_idx = idx_furthest
