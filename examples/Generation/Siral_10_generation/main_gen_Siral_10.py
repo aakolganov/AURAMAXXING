@@ -11,9 +11,15 @@ from pathlib import Path
 import numpy as np
 
 from base.initialize import initialize_structure_file
+from base.config import CoordinationConfig
 from base.limits import make_limit_flat, make_limits_fourier, fix_limits
 from growth.new_growth import grow_structure, finalize_structure
 from interfaces.LAMMPS_Interface import LMPInterface
+from default_constants import SIRAL_OVERCOORD
+
+# Allow ~20% of Al to grow octahedral (CN up to 6); the rest stay tetrahedral (CN 4).
+# Applies to atoms grown on top; the loaded substrate keeps its element-default limits.
+COORD_CONFIG = CoordinationConfig(overcoord_policy=SIRAL_OVERCOORD)
 
 # 1 Si : 4.5 Al, with O for a charge-neutral oxide: (10*4 + 45*3)/2 = 87.5 O.
 # Scaled to integers: Si:20, Al:90, O:175 (target_ratios are relative weights).
@@ -29,7 +35,7 @@ def generate(alpha: float, seed: int, out_dir: Path) -> None:
     # the substrate frozen: it survives loading, atom add/remove and slicing, and is
     # honoured by both the growth anneal and the final optimisation. No extra
     # freezing bookkeeping is needed here.
-    struct = initialize_structure_file("POSCAR_bare_gAl_110", ase_read_kwargs={})
+    struct = initialize_structure_file("POSCAR_bare_gAl_110", ase_read_kwargs={}, config=COORD_CONFIG)
     struct.set_seed(seed)
 
     # Anchor the growth region just above the existing surface.

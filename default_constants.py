@@ -103,3 +103,14 @@ El_O_BONDLENGTH = 1.63 #bond lenght for Si/Al - O bond
 
 # If the over-coordinated atoms formally gets assigned a positive charge then it is true
 OVER_POS = {"Si": False, "O": True, "H": False, "Al": False}
+
+
+# Overcoordination policy: per element, allow a random fraction of atoms to use an
+# elevated max coordination number. {} means the feature is off (every atom uses the
+# per-element max_cn). Each eligible atom is independently tagged at creation with
+# probability "fraction" (Bernoulli), so the realised fraction is approximate.
+default_overcoord_policy: Dict[str, Dict] = {}
+
+# Example policy used by the Siral generation scripts: ~20% of Al atoms may reach CN 6
+# (octahedral), the rest stay capped at the standard CN 4 (tetrahedral).
+SIRAL_OVERCOORD: Dict[str, Dict] = {"Al": {"max_cn": 6, "fraction": 0.2}}

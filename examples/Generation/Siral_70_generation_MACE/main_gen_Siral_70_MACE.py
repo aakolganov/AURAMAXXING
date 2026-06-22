@@ -10,9 +10,14 @@ from pathlib import Path
 import numpy as np
 
 from base.initialize import initialize_structure_blank
+from base.config import CoordinationConfig
 from base.limits import make_limit_flat, make_limits_fourier, fix_limits
 from growth.new_growth import grow_structure, finalize_structure
 from interfaces.MACE_interface import MACEInterface
+from default_constants import SIRAL_OVERCOORD
+
+# Allow ~20% of Al to grow octahedral (CN up to 6); the rest stay tetrahedral (CN 4).
+COORD_CONFIG = CoordinationConfig(overcoord_policy=SIRAL_OVERCOORD)
 
 TARGET_RATIOS = {"Si": 4, "Al": 2, "O": 11}   # see main_gen_Siral_70.py for the stoichiometry
 TARGET_ATOMS = 440
@@ -24,7 +29,7 @@ DEVICE = "cuda"                                     # "cuda" / "cpu" / "mps"
 
 
 def generate(alpha: float, seed: int, out_dir: Path, calc) -> None:
-    struct = initialize_structure_blank(cell=CELL)
+    struct = initialize_structure_blank(cell=CELL, config=COORD_CONFIG)
     struct.set_seed(seed)
 
     make_limit_flat(struct, z_val=12.0, is_for="bottom")
