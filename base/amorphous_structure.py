@@ -79,9 +79,36 @@ class AmorphousStruc:
     
 
     def commit_atom(self, atom_type: str, position: np.ndarray) -> None:
-        """Simple wrap to add an atom and trigger a graph update."""
+        """Add an atom and keep the coordination graph in sync.
+
+        Appending only adds edges for the new atom, so when an up-to-date graph
+        already exists we extend it incrementally instead of forcing a full
+        O(N) neighbour-list rebuild on the next query (the growth hot path adds
+        one atom at a time). Otherwise we just mark the graph stale.
+        """
         self.atoms.append(Atom(atom_type, position=position))
-        self._need_graph_update = True
+        new_idx = len(self.atoms) - 1
+        if self._graph is not None and not self._need_graph_update:
+            self._add_atom_to_graph(new_idx)
+        else:
+            self._need_graph_update = True
+
+    def _add_atom_to_graph(self, idx: int) -> None:
+        """Add node `idx` (the last atom) and its edges to the cached graph.
+
+        Mirrors _rebuild_graph's edge rule exactly: an edge is added when the
+        minimum-image distance is strictly below the element-pair cutoff.
+        """
+        self._graph.add_node(idx, symbol=self.atoms[idx].symbol)
+        if idx == 0:
+            return
+        sym_new = self.atoms[idx].symbol
+        symbols = self.atoms.get_chemical_symbols()
+        dists = self.atoms.get_distances(idx, list(range(idx)), mic=True)
+        for j, d in enumerate(dists):
+            cutoff = self.cut_offs.get((sym_new, symbols[j]))
+            if cutoff is not None and d < cutoff:
+                self._graph.add_edge(idx, j)
 
 
     def replace_atom(self, new_atom_type: str, new_position: np.ndarray, index: int) -> None:
