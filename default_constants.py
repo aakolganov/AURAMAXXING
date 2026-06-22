@@ -95,8 +95,6 @@ bks_charges = {
     "Al":  1.8,
 }
 
-NORM_COORDINATION = {"Si": 4,"Al": 4, "O": 2, "H": 1}
-
 # bond lenghst for satuarion routine
 O_H_BONDLENGTH = 0.98
 El_O_BONDLENGTH = 1.63 #bond lenght for Si/Al - O bond
