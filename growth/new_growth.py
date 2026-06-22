@@ -43,12 +43,14 @@ def grow_structure(
                 pbar.update(1)
                 continue
             
-            idx_connect_to = choose_atom_idx_to_attach_to(amorphous_struct, atom_to_add)
-
             # Nothing is committed until a placement succeeds, so the structure is
-            # fixed across these attempts: build the collision trees once and reuse
-            # them for every anchor we try instead of rebuilding on each attempt.
+            # fixed across these attempts: compute the per-atom coordination numbers
+            # and the per-element collision trees once and reuse them for every
+            # anchor we try, instead of recomputing them on each attempt.
+            all_cn = amorphous_struct.get_cn()
             placement_cache = build_placement_cache(amorphous_struct)
+
+            idx_connect_to = choose_atom_idx_to_attach_to(amorphous_struct, atom_to_add, all_cn=all_cn)
 
             MAX_ITER, current_iter = 100, 0
             placement_success = False
@@ -66,7 +68,7 @@ def grow_structure(
                 if not placement_success:
                     excluded_idx.append(idx_connect_to)
                     # If placement fails, pick a different anchor
-                    idx_connect_to = choose_atom_idx_to_attach_to(amorphous_struct, atom_to_add, exclude_indices=excluded_idx)  # Try different connection point if placement failed
+                    idx_connect_to = choose_atom_idx_to_attach_to(amorphous_struct, atom_to_add, exclude_indices=excluded_idx, all_cn=all_cn)  # Try different connection point if placement failed
             
             if placement_success:
                 pbar.update(1)
