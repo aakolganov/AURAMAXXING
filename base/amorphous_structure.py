@@ -60,12 +60,16 @@ class AmorphousStruc:
         int | np.ndarray
             The coordination number(s).
         """
+        graph = self.get_graph()
         if index is not None:
             # The degree of a node is its coordination number
-            return self.get_graph().degree(index)
-        
-        # Return an array of CNs for all atoms in the structure
-        return np.array([self.get_graph().degree(i) for i in range(len(self.atoms))])
+            return graph.degree(index)
+
+        # Return an array of CNs for all atoms. dict(graph.degree()) materialises
+        # every degree in a single pass; the previous per-node graph.degree(i) cost
+        # ~two networkx calls per atom and dominated the growth hot path.
+        degrees = dict(graph.degree())
+        return np.array([degrees[i] for i in range(len(self.atoms))])
 
 
     def get_atom_count(self, atom_type: str) -> int:

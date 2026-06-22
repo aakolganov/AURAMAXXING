@@ -4,9 +4,13 @@ from base import AmorphousStruc
 from typing import Optional
 
 
-def choose_atom_idx_to_attach_to(amorphous_struct: AmorphousStruc, atom_type: str, weight_z: bool = True, added_weights: Optional[callable]=None, exclude_indices: Optional[list[int]] = None) -> int:
+def choose_atom_idx_to_attach_to(amorphous_struct: AmorphousStruc, atom_type: str, weight_z: bool = True, added_weights: Optional[callable]=None, exclude_indices: Optional[list[int]] = None, all_cn: Optional[np.ndarray] = None) -> int:
     symbols = np.array(amorphous_struct.symbols)
-    all_cn = amorphous_struct.get_cn()
+    # Coordination numbers don't change across retries on the same structure, so a
+    # caller in a retry loop can compute them once and pass them in to avoid the
+    # repeated all-atom graph walk.
+    if all_cn is None:
+        all_cn = amorphous_struct.get_cn()
 
     # Determine which atom types are valid to attach to
     allowed_attachment_atoms = OXIDATION_NEG.keys() if atom_type in OXIDATION_POS else OXIDATION_POS.keys()
