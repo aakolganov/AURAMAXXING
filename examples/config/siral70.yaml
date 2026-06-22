@@ -1,0 +1,33 @@
+# Si/Al (Siral-70) amorphous oxide: grow with BKS/LAMMPS, then saturate and
+# charge-neutralize with a MACE potential. Sweeps two seeds x three roughnesses
+# (6 structures total), with ~20% of Al allowed to grow octahedral (CN up to 6).
+# Run with:  python -m runner examples/config/siral70.yaml
+
+structure:
+  cell: [22.0, 22.0, 40.0]
+
+composition:
+  target_ratios: {Si: 4, Al: 2, O: 11}   # 2 Si : 1 Al, charge-neutral oxide
+  target_number_atoms: 440
+
+limits:
+  bottom: {type: flat,    z: 12.0}
+  top:    {type: fourier, z_av: 24.0, alpha: 1.0}   # alpha overridden by run.roughness below
+  fix: bottom
+
+coordination:
+  overcoord_policy:
+    Al: {max_cn: 6, fraction: 0.2}
+
+calculators:
+  growth:     {type: lammps, dump_path: dump_lmp}
+  saturation: {type: mace, mace_model_path: your_model.model, device: cuda, dump_path: dump_mace}
+
+saturation:        {enabled: true}
+charge_correction: {enabled: true}
+
+run:
+  seeds: [0, 1]
+  roughness: [0.01, 0.1, 1.0]       # overrides limits.top.alpha; one structure per (seed, alpha)
+  output_dir: output/siral70
+  output_format: vasp

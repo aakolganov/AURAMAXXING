@@ -22,7 +22,7 @@ jobs:
           environment-name: auramaxxing-ci
           # numpy pinned <2: conda-forge scipy/lammps are built against the numpy 1.x ABI.
           create-args: >-
-            python=3.11 numpy=1.26 scipy ase networkx tqdm matplotlib lammps pytest
+            python=3.11 numpy=1.26 scipy ase networkx tqdm matplotlib pyyaml lammps pytest
           cache-environment: true
       - name: Run LAMMPS integration tests
         run: pytest -m lammps
@@ -40,7 +40,7 @@ jobs:
         with:
           environment-name: auramaxxing-ci-heavy
           create-args: >-
-            python=3.11 numpy=1.26 scipy ase networkx tqdm matplotlib pytest
+            python=3.11 numpy=1.26 scipy ase networkx tqdm matplotlib pyyaml pytest
           cache-environment: true
       - name: Install torch + MACE (pip), then restore numpy<2
         run: |

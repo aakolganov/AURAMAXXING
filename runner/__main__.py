@@ -1,0 +1,42 @@
+"""Command-line entry point: ``python -m runner config.yaml`` (or the ``auramaxxing``
+console script once installed)."""
+import argparse
+import sys
+from typing import Optional
+
+from .config import load_config
+from .runner import resolve_plan, run_from_config
+
+
+def main(argv: Optional[list] = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="auramaxxing",
+        description="Generate amorphous oxide surfaces from a YAML config file.",
+    )
+    parser.add_argument("config", help="path to the YAML configuration file")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="validate the config and print the per-structure plan without running")
+    args = parser.parse_args(argv)
+
+    try:
+        cfg = load_config(args.config)
+    except (ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    plan = resolve_plan(cfg)
+    print(f"Resolved {len(plan)} structure(s) from {args.config}:")
+    for entry in plan:
+        alpha = entry["alpha"]
+        alpha_str = f"{alpha:.3f}" if alpha is not None else "flat"
+        print(f"  seed={entry['seed']:<4} alpha={alpha_str:<6} -> {entry['output_path']}")
+
+    if args.dry_run:
+        return 0
+
+    run_from_config(cfg)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

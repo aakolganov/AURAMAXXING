@@ -6,5 +6,6 @@ ase
 networkx
 tqdm
 matplotlib
+pyyaml
 pytest
 ruff

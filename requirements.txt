@@ -4,6 +4,7 @@ networkx
 ase~=3.24.0
 matplotlib~=3.10.0
 tqdm~=4.67.1
+pyyaml
 torch~=2.7.0
 mace-torch~= 0.3.13
 lammps~=2024.8.29.3.0

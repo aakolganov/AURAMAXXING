@@ -13,6 +13,7 @@ dependencies:
   - networkx
   - tqdm
   - matplotlib
+  - pyyaml
   - lammps
   - pip
   - pip:
