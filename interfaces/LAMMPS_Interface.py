@@ -2,7 +2,6 @@ from typing import Optional, Any
 import os
 from ase.calculators.lammpslib import LAMMPSlib
 from ase import Atoms
-from ase.constraints import FixAtoms
 from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
 from ase.md.verlet import VelocityVerlet
 from ase.units import fs, kB
@@ -155,16 +154,16 @@ class LMPInterface(CalculatorInterface):
     def optimize(self, atoms: Atoms, fmax: float = 2.0, max_steps: int = 50,
                  logfile: str = "log.log", traj_name: Optional[str] = None,
                  traj_fmt: Optional[str] = None,
-                 frozen_atoms: Optional[list] = None,
                  **kwargs: Any) -> Atoms:
         """
         Optimize the geometry with the BKS/LAMMPS potential. The LAMMPS calculator
         is rebuilt for this structure (atom_types depend on which elements are
         present), then the shared LBFGS/trajectory machinery of the base class runs.
+
+        Any ASE constraints already on the atoms (e.g. a FixAtoms substrate from a
+        POSCAR's Selective Dynamics) are honoured by the optimizer as-is.
         """
         self.calc = self._init_lmp_calculator(atoms)
-        if frozen_atoms is not None:
-            atoms.set_constraint(FixAtoms(indices=frozen_atoms))
         return super().optimize(
             atoms, fmax=fmax, max_steps=max_steps, logfile=logfile,
             traj_name=traj_name, traj_fmt=traj_fmt, **kwargs,

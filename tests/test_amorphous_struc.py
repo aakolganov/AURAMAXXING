@@ -22,15 +22,6 @@ def test_replace_atom_changes_symbol_and_position(make_struct):
     assert np.allclose(s.atoms.get_positions()[0], [12.0, 10, 10])
 
 
-def test_remove_atom_remaps_frozen_indices(make_struct):
-    s = make_struct(["Si", "O", "O", "H"], [[0, 0, 0], [2, 0, 0], [4, 0, 0], [6, 0, 0]],
-                    cell=(20.0, 20.0, 20.0))
-    s.frozen_indices = [2, 3]
-    s.remove_atom(0)                                   # shifts indices down by one
-    assert len(s) == 3
-    assert s.frozen_indices == [1, 2]
-
-
 def test_remove_atom_preserves_and_remaps_fixatoms(make_struct):
     from ase.constraints import FixAtoms
     s = make_struct(["Si", "O", "O", "H"], [[0, 0, 0], [2, 0, 0], [4, 0, 0], [6, 0, 0]],
