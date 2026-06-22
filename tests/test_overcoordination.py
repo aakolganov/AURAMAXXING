@@ -1,7 +1,6 @@
 """Tests for configurable / per-atom coordination limits and the Al overcoordination
 policy (a fraction of Al allowed to reach CN 6)."""
 import numpy as np
-import pytest
 
 from base.amorphous_structure import AmorphousStruc_factory
 from base.config import CoordinationConfig
@@ -104,10 +103,10 @@ def test_sort_atoms_keeps_max_cn_aligned():
     )
     s.apply_overcoord_policy()
     before = {(sym, int(tag)) for sym, tag in
-              zip(s.symbols, s.atoms.arrays["max_cn"])}
+              zip(s.symbols, s.atoms.arrays["max_cn"], strict=True)}
     s.sort_atoms()
     after = {(sym, int(tag)) for sym, tag in
-             zip(s.symbols, s.atoms.arrays["max_cn"])}
+             zip(s.symbols, s.atoms.arrays["max_cn"], strict=True)}
     assert before == after
 
 

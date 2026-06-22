@@ -61,7 +61,7 @@ def main():
 
     modifier = PeriodicStructureModifier(struct)
     modifier.add_rule(AvoidMotifSwapRule(edge_element="Al", center_element="O", swap_candidate="Si"))
-    is_valid = modifier.optimize(max_iterations=500)
+    modifier.optimize(max_iterations=500)
     finalize_structure(
         amorphous_struct=struct,
         calculator=calc,

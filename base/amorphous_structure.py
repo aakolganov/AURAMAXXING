@@ -251,7 +251,7 @@ class AmorphousStruc:
             G.add_node(idx, symbol=atom.symbol)
 
         # 4. Add edges from the ASE neighbor pairs
-        G.add_edges_from(zip(i_indices, j_indices))
+        G.add_edges_from(zip(i_indices, j_indices, strict=False))
         
         # Clean up any self-interactions (if periodic boundary conditions caused them)
         G.remove_edges_from(nx.selfloop_edges(G))
@@ -306,7 +306,7 @@ def AmorphousStruc_factory(
     else:
         rng = np.random.default_rng(seed)
 
-    if not cell is None:
+    if cell is not None:
         pbc = True
     if pbc and cell is None:
         raise ValueError("Cannot have periodic boundary conditions without a cell.")
