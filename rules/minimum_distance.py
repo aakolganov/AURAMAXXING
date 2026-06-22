@@ -2,6 +2,7 @@ from .alteration_rule import AlterationRule
 import numpy as np
 from typing import Optional
 from ase import Atoms
+from ase.neighborlist import neighbor_list
 import networkx as nx
 
 class MinimumDistanceRule(AlterationRule):
@@ -16,14 +17,12 @@ class MinimumDistanceRule(AlterationRule):
         self.step = step_size
 
     def apply(self, atoms: Atoms, graph: nx.Graph) -> bool:
-        dm = atoms.get_all_distances(mic=True)
-        # Create a mask to ignore self-interactions
-        np.fill_diagonal(dm, np.inf) 
-        
-        # Find where distance is too small
-        close_pairs = np.argwhere(dm < self.min_dist)
-        
-        for idx_a, idx_b in close_pairs:
+        # O(N) neighbour search for pairs closer than min_dist, instead of building
+        # the full O(N^2) distance matrix. neighbor_list returns each violating pair
+        # in both directions; we act on the first one matching the element filter.
+        i_idx, j_idx = neighbor_list("ij", atoms, self.min_dist)
+
+        for idx_a, idx_b in zip(i_idx, j_idx, strict=True):
             sym_a, sym_b = atoms[idx_a].symbol, atoms[idx_b].symbol
             
             # Check if this pair matches our target elements
