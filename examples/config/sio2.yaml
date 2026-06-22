@@ -1,0 +1,23 @@
+# Amorphous SiO2 slab grown with the BKS/LAMMPS backend.
+# Run with:  python -m runner examples/config/sio2.yaml
+#       or:  python -m runner --dry-run examples/config/sio2.yaml   (validate only)
+
+structure:
+  cell: [22.0, 22.0, 40.0]          # orthogonal box in Angstrom; z holds slab + vacuum
+
+composition:
+  target_ratios: {Si: 1, O: 2}      # relative stoichiometric weights (SiO2)
+  target_number_atoms: 432          # grow until the slab has this many atoms
+
+limits:
+  bottom: {type: flat,    z: 12.0}              # flat floor at z = 12
+  top:    {type: fourier, z_av: 24.0, alpha: 0.3}  # rough ceiling (smaller alpha = rougher)
+  fix: bottom
+
+calculators:
+  growth: {type: lammps, dump_path: dump_lmp}
+
+run:
+  seeds: [0]
+  output_dir: output/sio2
+  output_format: vasp
