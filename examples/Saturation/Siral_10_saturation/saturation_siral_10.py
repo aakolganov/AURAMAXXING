@@ -19,6 +19,11 @@ from growth.new_growth import finalize_structure
 def main():
     struct = initialize_structure_file("POSCAR_Siral_10", ase_read_kwargs={})
 
+    # NOTE on MPS: MACEInterface loads the model in float32 (MACE checkpoints are
+    # often float64, which MPS cannot load directly, so it casts on CPU first).
+    # mace-torch 0.3.16's forward still computes some terms in float64, which MPS
+    # does not support, so the relaxation may fail on MPS with that version --
+    # use device="cpu"/"cuda" (or a newer mace) if you hit that.
     calc = MACEInterface(
         mace_model_path="2024-01-07-mace-128-L2_epoch-199.model",  # path to the MACE model
         device="mps",          # "cuda" / "cpu" / "mps" (Apple Silicon)
