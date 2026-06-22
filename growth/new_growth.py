@@ -2,6 +2,7 @@ import os
 from typing import Optional
 from tqdm import tqdm
 from pathlib import Path
+import numpy as np
 
 from default_constants import sample_dist
 from helpers.atom_placing import place_atom_sphere, place_atom_most_z_space, slice_structure
@@ -24,6 +25,11 @@ def grow_structure(
 
     if calculator is None:
         raise ValueError("a calculator (CalculatorInterface) is required")
+
+    # Bond lengths are drawn from scipy distributions (sample_dist), whose .rvs()
+    # uses numpy's global RNG. Seed it from the structure's seeded generator so a
+    # given set_seed() makes the whole growth reproducible.
+    np.random.seed(int(amorphous_struct.rng.integers(2**31 - 1)))
 
     num_placement_attempts = 0
     with tqdm(total=target_number_atoms, initial=len(amorphous_struct)) as pbar:

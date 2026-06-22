@@ -18,7 +18,7 @@ def test_lammps_anneal_schedule_cools(tmp_path):
     assert temps[0] == pytest.approx(2000.0, abs=1e-6)          # starts hot
     assert temps[-1] < 600.0                                     # genuinely quenched
     # monotonically non-increasing (a real cooling ramp, not a constant hold)
-    assert all(b <= a + 1e-9 for a, b in zip(temps, temps[1:]))
+    assert all(b <= a + 1e-9 for a, b in zip(temps, temps[1:], strict=False))
 
 
 def test_lmp_interface_is_a_calculator_interface(tmp_path):

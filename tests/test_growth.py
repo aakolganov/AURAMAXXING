@@ -66,3 +66,69 @@ def test_slice_structure_keeps_fixed_atoms(make_struct):
     assert len(s.atoms) == 3
     fixed = [int(i) for c in s.atoms.constraints for i in c.get_indices()]
     assert sorted(fixed) == [0, 1]
+
+
+def test_slice_structure_removes_out_of_bounds(make_struct):
+    from base.limits import make_limit_flat
+    from helpers.atom_placing import slice_structure
+
+    # one atom inside [10,18], one below, one above -> only the inside one survives
+    s = make_struct(["Si", "Si", "Si"], [[5, 5, 14], [5, 5, 2], [5, 5, 25]],
+                    cell=(20.0, 20.0, 30.0))
+    make_limit_flat(s, z_val=10.0, is_for="bottom")
+    make_limit_flat(s, z_val=18.0, is_for="top")
+
+    slice_structure(s)
+    assert len(s.atoms) == 1
+    assert 10.0 <= s.atoms.get_positions()[0, 2] <= 18.0
+
+
+# --- Tier A #1: a grown structure must satisfy basic physical invariants ----------
+
+def _build_growth_struct(seed, cell=(20.0, 20.0, 25.0)):
+    from base.initialize import initialize_structure_blank
+    from base.limits import make_limit_flat, fix_limits
+    s = initialize_structure_blank(cell=list(cell))
+    s.set_seed(seed)
+    make_limit_flat(s, z_val=5.0, is_for="bottom")
+    make_limit_flat(s, z_val=20.0, is_for="top")
+    fix_limits(s.limits, hard_limit="bottom")
+    return s
+
+
+def test_growth_produces_valid_structure(dummy_calc, tmp_path):
+    from growth.new_growth import grow_structure
+
+    target, cell = 30, (20.0, 20.0, 25.0)
+    s = _build_growth_struct(seed=1, cell=cell)
+    grow_structure(s, target_number_atoms=target, target_ratios={"Si": 1, "O": 2},
+                   calculator=dummy_calc, output_dir=tmp_path / "g")
+
+    assert len(s) == target                                  # reaches the requested size
+
+    syms = s.symbols                                          # composition tracks 1:2 Si:O
+    o_frac = syms.count("O") / len(syms)
+    assert 0.5 < o_frac < 0.8
+
+    dm = s.atoms.get_all_distances(mic=True)                  # no steric clashes
+    np.fill_diagonal(dm, np.inf)
+    assert dm.min() > 1.4
+
+    pos = s.atoms.get_positions()                             # inside the periodic cell
+    assert np.all(pos >= 0.0) and np.all(pos < np.array(cell))
+
+
+# --- Tier A #2: seeded growth is reproducible ------------------------------------
+
+def test_growth_is_deterministic(dummy_calc, tmp_path):
+    from growth.new_growth import grow_structure
+
+    def run(out):
+        s = _build_growth_struct(seed=42)
+        grow_structure(s, target_number_atoms=24, target_ratios={"Si": 1, "O": 2},
+                       calculator=dummy_calc, output_dir=tmp_path / out)
+        return s
+
+    a, b = run("a"), run("b")
+    assert a.symbols == b.symbols
+    assert np.allclose(a.atoms.get_positions(), b.atoms.get_positions())
