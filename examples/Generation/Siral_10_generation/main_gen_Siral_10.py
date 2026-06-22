@@ -24,6 +24,11 @@ ALPHAS = np.logspace(-2, 0, 4)
 
 
 def generate(alpha: float, seed: int, out_dir: Path) -> None:
+    # The POSCAR uses Selective Dynamics (F F F) to mark the lower substrate layers
+    # as fixed. ASE reads this into a FixAtoms constraint, which we rely on to keep
+    # the substrate frozen: it survives loading, atom add/remove and slicing, and is
+    # honoured by both the growth anneal and the final optimisation. No extra
+    # freezing bookkeeping is needed here.
     struct = initialize_structure_file("POSCAR_bare_gAl_110", ase_read_kwargs={})
     struct.set_seed(seed)
 

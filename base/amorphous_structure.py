@@ -18,7 +18,6 @@ class AmorphousStruc:
     min_cn: dict = field(default_factory=default_min_cn.copy)
     cut_offs: dict = field(default_factory=pair_cutoffs.copy)
     rng: np.random.Generator = field(default_factory=np.random.default_rng)
-    frozen_indices: list[int] = field(default_factory=list)
     limits: Limits = field(default=None, init=False, repr=False)
     
     _graph: nx.Graph | None = field(default=None, init=False, repr=False)
@@ -27,10 +26,6 @@ class AmorphousStruc:
 
     def __len__(self):
         return len(self.atoms)
-    
-    @property
-    def has_frozen(self) -> bool:
-        return len(self.frozen_indices) > 0
 
     @property
     def symbols(self) -> list[str]:
@@ -121,7 +116,10 @@ class AmorphousStruc:
     def remove_atom(self, index: Union[int, slice, List[int], np.ndarray]) -> None:
         """
         Remove an atom (or multiple atoms) and trigger a graph update.
-        Handles updating frozen_indices if necessary.
+
+        Any ASE constraints on the atoms (e.g. a FixAtoms substrate carried in
+        from a VASP POSCAR with Selective Dynamics) are preserved and reindexed
+        automatically by ASE's atom slicing below.
         """
         n_atoms = len(self.atoms)
         keep_mask = np.ones(n_atoms, dtype=bool)
@@ -139,14 +137,6 @@ class AmorphousStruc:
                 keep_mask = ~index
             else:
                 keep_mask[index] = False
-
-        if self.has_frozen:
-            # Map old indices to new indices
-            idx_map = np.cumsum(keep_mask) - 1
-            # Filter and map the frozen indices
-            self.frozen_indices = [
-                int(idx_map[i]) for i in self.frozen_indices if keep_mask[i]
-            ]
 
         self.atoms = self.atoms[keep_mask]
         self._need_graph_update = True
