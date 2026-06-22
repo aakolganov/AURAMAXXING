@@ -6,7 +6,7 @@ Heavy calculators are never imported here; use the ``dummy_calc`` fixture instea
 import numpy as np
 import pytest
 
-from base.amorphous_structure import AmorphousStruc, AmorphousStruc_factory
+from base.amorphous_structure import AmorphousStruc_factory
 
 
 @pytest.fixture

@@ -172,8 +172,15 @@ def saturate_under_coordinated(
 def correct_charge(
         amorphous_struct: AmorphousStruc,
         bond_lengths=None,
+        max_iterations: int = 1000,
     ):
-    """ Creates a charge neutral surface through adding H and OH until correct. Add to over-coordinated atoms. Does not Optimize structure. """
+    """ Creates a charge neutral surface through adding H and OH until correct. Add to over-coordinated atoms. Does not Optimize structure.
+
+    Each iteration changes the net formal charge by one unit toward zero, so a
+    neutral structure is normally reached in |charge| steps. `max_iterations` caps
+    the loop so it can never run away (e.g. if placement can never satisfy the
+    charge balance); a warning is printed if the cap is hit while still charged.
+    """
     if bond_lengths is None:
         bond_lengths = DEFAULT_SAT_BOND_LENGTHS
     def try_then_force_place(place_atom: str, attach_idx: int):
@@ -182,7 +189,13 @@ def correct_charge(
             is_placed = place_atom_force(amorphous_struct, atom_type=place_atom, idx_anchor=attach_idx, num_samples=250, bond_length=bond_lengths[place_atom])
 
     current_charge = amorphous_struct.charge()
+    iteration = 0
     while current_charge != 0:
+        if iteration >= max_iterations:
+            print(f"correct_charge: reached max_iterations ({max_iterations}) with "
+                  f"net charge {current_charge}; stopping.")
+            break
+        iteration += 1
         if current_charge > 0:
             # implied positive charge so move an over-coordinated atom which is positively charged
             over_cn = collect_over_or_under_cn_atoms(amorphous_struct, do_under=False)
@@ -190,9 +203,12 @@ def correct_charge(
         else:
             undr_cn = collect_over_or_under_cn_atoms(amorphous_struct, do_under=True)
             indices = [i for k, v in OVER_POS.items() if not v and k in undr_cn for i in undr_cn[k]]
-        
+
         if len(indices) == 0:
             indices = find_tetrogonal_sites(amorphous_struct)
+        if len(indices) == 0:
+            print("correct_charge: no candidate atoms left to adjust the charge; stopping.")
+            break
 
         chosen_idx_pos, idx_furthest = select_idx_for_move(amorphous_struct, indices)
         move_atom(

@@ -44,3 +44,24 @@ def test_correct_charge_no_debug_dump(make_struct, monkeypatch, tmp_path):
     correct_charge(s)
 
     assert not (tmp_path / "before_opt.vasp").exists()
+
+
+# --- Tier A #3: correct_charge must terminate (neutralise, or stop cleanly) -------
+
+def test_correct_charge_noop_on_neutral(make_struct):
+    from saturation.new_sat import correct_charge
+    s = make_struct(["Si", "O", "O"], [[10, 10, 10], [11.6, 10, 10], [8.4, 10, 10]],
+                    cell=(20.0, 20.0, 20.0))
+    assert s.charge() == 0
+    correct_charge(s)                 # already neutral -> no-op, must return
+    assert s.charge() == 0
+
+
+def test_correct_charge_terminates_when_unsatisfiable(make_struct):
+    from saturation.new_sat import correct_charge
+    # a lone Si is charged (+4) but has no anion / tetrahedral site to attach to,
+    # so correct_charge cannot neutralise it -- it must stop, not loop forever.
+    s = make_struct(["Si"], [[10, 10, 10]], cell=(20.0, 20.0, 20.0))
+    assert s.charge() != 0
+    correct_charge(s, max_iterations=50)   # returns via the no-candidate / cap guard
+    assert isinstance(s.charge(), (int, float))
