@@ -23,7 +23,7 @@ MACE_MODEL_PATH = "path/to/your_mace_model.model"   # <-- set this
 DEVICE = "cuda"                                     # "cuda" / "cpu" / "mps"
 
 
-def generate(alpha: float, seed: int, out_dir: Path) -> None:
+def generate(alpha: float, seed: int, out_dir: Path, calc) -> None:
     struct = initialize_structure_blank(cell=CELL)
     struct.set_seed(seed)
 
@@ -31,11 +31,6 @@ def generate(alpha: float, seed: int, out_dir: Path) -> None:
     make_limits_fourier(struct, z_av=24.0, alpha=alpha, is_for="top")
     fix_limits(struct.limits, hard_limit="bottom")
 
-    calc = MACEInterface(
-        mace_model_path=MACE_MODEL_PATH,
-        device=DEVICE,
-        dump_path=str(out_dir / "dump_mace"),
-    )
     grow_structure(
         amorphous_struct=struct,
         target_number_atoms=TARGET_ATOMS,
@@ -48,6 +43,13 @@ def generate(alpha: float, seed: int, out_dir: Path) -> None:
 
 
 if __name__ == "__main__":
+    # Build the MACE calculator once and reuse it for every roughness: the model is
+    # large, so re-loading it per structure wastes time and leaks memory.
+    calc = MACEInterface(
+        mace_model_path=MACE_MODEL_PATH,
+        device=DEVICE,
+        dump_path="dump_mace",
+    )
     base = Path("Siral_70_MACE")
     for i, alpha in enumerate(ALPHAS):
-        generate(alpha=float(alpha), seed=i, out_dir=base / f"alpha_{alpha:.3f}")
+        generate(alpha=float(alpha), seed=i, out_dir=base / f"alpha_{alpha:.3f}", calc=calc)
