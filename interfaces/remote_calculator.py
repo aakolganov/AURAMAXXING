@@ -7,8 +7,9 @@ process, blocking for the energy + forces. The worker never touches CUDA.
 ``RemoteCalculator`` is a drop-in ``CalculatorInterface``: ``optimize``/``anneal`` run the
 existing ASE ``LBFGS``/``AnnealingLangevin`` locally, but the attached ASE calculator is a
 thin proxy (``RemoteASECalculator``) that round-trips each ``calculate`` to the evaluator.
-``evaluator_loop`` is the server side. IPC is via ``multiprocessing.Manager`` queues (their
-proxies are picklable, so they survive the spawn start method that CUDA requires).
+``evaluator_loop`` is the server side; it can batch several queued requests into one forward
+pass. IPC uses plain ``multiprocessing`` queues (passed to the worker/evaluator processes at
+creation), avoiding the extra hop of a Manager proxy.
 """
 import queue as _queue
 from pathlib import Path
@@ -71,32 +72,117 @@ class RemoteCalculator(CalculatorInterface):
         self.dump_path.mkdir(parents=True, exist_ok=True)
 
 
+def _atoms_from_req(req) -> Atoms:
+    return Atoms(numbers=req["numbers"], positions=req["positions"],
+                 cell=req["cell"], pbc=req["pbc"])
+
+
+def _eval_one(calc, req) -> dict:
+    """Evaluate one config through the ASE calculator. Captures errors as a reply so a single
+    bad config fails just its own slab, not the whole batch."""
+    try:
+        atoms = _atoms_from_req(req)
+        atoms.calc = calc
+        energy = float(atoms.get_potential_energy())
+        return {"energy": energy, "forces": np.asarray(atoms.get_forces())}
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+def _supports_batching(calc) -> bool:
+    """True for a single-model MACE calculator whose own preprocessing we can reuse to build
+    a multi-graph batch. Anything else (ensembles, non-MACE) takes the per-config path."""
+    models = getattr(calc, "models", None)
+    return hasattr(calc, "_atoms_to_batch") and isinstance(models, (list, tuple)) and len(models) == 1
+
+
+def _mace_real_graph(calc, atoms):
+    """Build the single-config ``AtomicData`` exactly as ``MACECalculator._atoms_to_batch``
+    does (same key spec, z-table, cutoff, dtype), so a batch of these reproduces per-config
+    results bit-for-bit."""
+    from mace import data as mace_data
+    from mace.tools import torch_tools
+
+    arrays_keys = dict(calc.arrays_keys)
+    arrays_keys.update({calc.charges_key: "charges"})
+    keyspec = mace_data.KeySpecification(info_keys=calc.info_keys, arrays_keys=arrays_keys)
+    with torch_tools.default_dtype(calc.default_dtype):
+        config = mace_data.config_from_atoms(atoms, key_specification=keyspec, head_name=calc.head)
+        return mace_data.AtomicData.from_config(
+            config, z_table=calc.z_table, cutoff=calc.r_max, heads=calc.available_heads)
+
+
+def _mace_batched_eval(calc, reqs: list) -> list:
+    """Evaluate several configs in ONE MACE forward pass: build each config's graph the way the
+    calculator does, collate them with MACE's own ``DataLoader``, run the model once, then split
+    energy/forces per graph (via the batch ``ptr``) and apply the calculator's unit conversions.
+    Matches per-config output."""
+    import torch
+    from mace.tools import torch_geometric
+
+    model = calc.models[0]
+    graphs = [_mace_real_graph(calc, _atoms_from_req(r)) for r in reqs]
+    loader = torch_geometric.dataloader.DataLoader(
+        dataset=graphs, batch_size=len(graphs), shuffle=False, drop_last=False)
+    batch = next(iter(loader)).to(calc.device)
+    model_dtype = next(model.parameters()).dtype
+    for key in batch.keys:
+        value = batch[key]
+        if torch.is_tensor(value) and torch.is_floating_point(value):
+            batch[key] = value.to(dtype=model_dtype)
+    out = model(batch.to_dict(), training=False, compute_force=True, compute_stress=False)
+
+    e_conv = calc.energy_units_to_eV
+    f_conv = calc.energy_units_to_eV / calc.length_units_to_A
+    energies = out["energy"].detach().double().cpu().numpy()
+    forces = out["forces"].detach().double().cpu().numpy()
+    ptr = batch.ptr.detach().cpu().numpy()
+    return [{"energy": float(energies[i]) * e_conv,
+             "forces": np.asarray(forces[ptr[i]:ptr[i + 1]] * f_conv)}
+            for i in range(len(reqs))]
+
+
 def evaluator_loop(request_q, response_qs, calc_factory, device: str = "cuda",
-                   threads=None) -> None:
+                   threads=None, batch_size: int = 1) -> None:
     """Server side, run in a dedicated process: build the model on ``device`` via
     ``calc_factory(device)`` (a picklable callable returning an ASE calculator) and serve
-    energy+forces for configurations arriving on ``request_q``, replying on the requester's
+    energy+forces for configurations arriving on ``request_q``, replying on each requester's
     response queue. A ``None`` request stops the loop.
 
-    Serves FIFO -- one request at a time -- which already keeps a single GPU busy when many
-    CPU workers feed it. Dynamic batching (coalescing same-shaped requests) can be layered on
-    later without changing the worker side.
+    With ``batch_size > 1`` it greedily drains up to that many requests already waiting and
+    evaluates them in a single batched forward pass (when the calculator is a single-model
+    MACE), so the GPU does one larger pass instead of N small ones. The batched path falls
+    back to per-config evaluation on any error, so it can never change results -- only speed.
     """
     if threads is not None:
         from runner.threads import configure_threads
         configure_threads(threads)
     calc = calc_factory(device)
-    while True:
-        req = request_q.get()
-        if req is None:
+    can_batch = batch_size > 1 and _supports_batching(calc)
+
+    stop = False
+    while not stop:
+        first = request_q.get()
+        if first is None:
             break
-        wid = req["id"]
-        try:
-            atoms = Atoms(numbers=req["numbers"], positions=req["positions"],
-                          cell=req["cell"], pbc=req["pbc"])
-            atoms.calc = calc
-            energy = atoms.get_potential_energy()
-            forces = atoms.get_forces()
-            response_qs[wid].put({"energy": float(energy), "forces": np.asarray(forces)})
-        except Exception as exc:   # report back so the worker raises instead of hanging
-            response_qs[wid].put({"error": f"{type(exc).__name__}: {exc}"})
+        batch = [first]
+        while len(batch) < batch_size:                 # coalesce whatever is already queued
+            try:
+                nxt = request_q.get_nowait()
+            except _queue.Empty:
+                break
+            if nxt is None:
+                stop = True
+                break
+            batch.append(nxt)
+
+        if can_batch and len(batch) > 1:
+            try:
+                replies = _mace_batched_eval(calc, batch)
+            except Exception:                          # never let batching break a result
+                replies = [_eval_one(calc, b) for b in batch]
+        else:
+            replies = [_eval_one(calc, b) for b in batch]
+
+        for req, reply in zip(batch, replies):
+            response_qs[req["id"]].put(reply)

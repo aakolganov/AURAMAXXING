@@ -7,6 +7,7 @@ import json
 import multiprocessing as mp
 
 import numpy as np
+import pytest
 
 from interfaces.remote_calculator import RemoteCalculator, evaluator_loop
 from runner.config import load_config
@@ -69,6 +70,36 @@ def test_remote_timeout_fails_fast(tmp_path):
     with pytest.raises(RuntimeError, match="did not respond"):
         atoms.get_potential_energy()
     assert time.time() - t < 5.0       # failed fast, did not hang
+
+
+@pytest.mark.heavy
+def test_mace_batched_matches_sequential():
+    # #4 correctness: the batched forward pass must equal per-config evaluation (the basis for
+    # the batched path being a pure speed optimization). Device-independent, so run on CPU.
+    pytest.importorskip("mace")
+    from ase import Atoms
+    from interfaces.MACE_interface import MACEInterface
+    from interfaces.remote_calculator import _mace_batched_eval, _eval_one, _supports_batching
+
+    calc = MACEInterface(mace_model_path="small", device="cpu").calc
+    assert _supports_batching(calc)
+
+    def req(symbols, coords):
+        a = Atoms(symbols, positions=coords, cell=[12, 12, 12], pbc=True)
+        return {"numbers": a.get_atomic_numbers(), "positions": a.get_positions(),
+                "cell": np.asarray(a.get_cell()), "pbc": a.get_pbc()}
+
+    # deliberately varied atom counts to exercise variable-size batching
+    reqs = [
+        req(["Si", "O", "O"], [[3, 3, 3], [4.6, 3, 3], [3, 4.6, 3]]),
+        req(["Si", "O", "O", "O", "Si"], [[3, 3, 3], [4.6, 3, 3], [3, 4.6, 3], [3, 3, 4.6], [6, 6, 6]]),
+        req(["O", "Si"], [[5, 5, 5], [6.6, 5, 5]]),
+    ]
+    batched = _mace_batched_eval(calc, reqs)
+    for r, b in zip(reqs, batched):
+        seq = _eval_one(calc, r)
+        assert abs(seq["energy"] - b["energy"]) < 1e-6
+        assert np.abs(seq["forces"] - b["forces"]).max() < 1e-6
 
 
 def test_run_remote_end_to_end(tmp_path):
