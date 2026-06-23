@@ -52,8 +52,16 @@ The primary interface is a **YAML config file** run through the `runner`:
 ```bash
 python -m runner examples/config/sio2.yaml            # generate
 python -m runner --dry-run examples/config/sio2.yaml  # validate + print the plan only
+python -m runner --threads 1 examples/config/sio2.yaml # cap compute threads per process
 auramaxxing examples/config/sio2.yaml                 # same, if installed with `pip install -e .`
 ```
+
+`--threads N` caps the compute threads this process uses (OMP/BLAS env + torch), to avoid
+oversubscription when running many slabs at once. The rule is `workers * threads <=
+cores_per_node`: use `--threads 1` for an in-node pool of many single-threaded workers, or
+`--threads <cores>` to give one slab the whole node (e.g. one MACE job per node). For
+backends whose threading initialises at interpreter start, also export `OMP_NUM_THREADS` in
+your launch/sbatch script.
 
 A minimal config — grow an amorphous SiO₂ slab with BKS/LAMMPS and write a POSCAR:
 

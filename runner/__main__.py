@@ -20,7 +20,17 @@ def main(argv: Optional[list] = None) -> int:
                         help="skip generation; gather the per-structure metrics.json already "
                              "under the output dir and (re)write the pooled report. Run once "
                              "after a parallel/sharded sweep finishes.")
+    parser.add_argument("--threads", type=int, default=None, metavar="N",
+                        help="limit compute threads per process to N (OMP/BLAS env + torch). "
+                             "Use 1 for an in-node pool of many workers; cores-per-node for "
+                             "one slab per node. Keep workers*threads <= cores_per_node.")
     args = parser.parse_args(argv)
+
+    # Apply before generation: the heavy backends (LAMMPS, torch/MACE) import lazily in
+    # build_calculator, so the env vars/torch limit set here take effect in time.
+    if args.threads is not None:
+        from .threads import configure_threads
+        configure_threads(args.threads)
 
     try:
         cfg = load_config(args.config)
