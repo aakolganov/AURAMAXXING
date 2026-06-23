@@ -41,6 +41,9 @@ def main(argv: Optional[list] = None) -> int:
                              "to it. Use --device to pick the evaluator device.")
     parser.add_argument("--device", default="cuda", metavar="DEV",
                         help="device for the --remote evaluator's model (default cuda).")
+    parser.add_argument("--batch-size", type=int, default=None, metavar="B",
+                        help="max requests the --remote evaluator coalesces into one forward "
+                             "pass (default = --workers). 1 disables batching.")
     args = parser.parse_args(argv)
 
     # Apply before generation: the heavy backends (LAMMPS, torch/MACE) import lazily in
@@ -77,8 +80,8 @@ def main(argv: Optional[list] = None) -> int:
     if args.remote:
         from .remote_run import run_remote_from_config
         run_remote_from_config(cfg, workers=args.workers, worker_threads=args.threads,
-                               device=args.device, shard=args.shard, num_shards=args.num_shards,
-                               resume=args.resume)
+                               device=args.device, batch_size=args.batch_size,
+                               shard=args.shard, num_shards=args.num_shards, resume=args.resume)
     else:
         run_from_config(cfg, workers=args.workers, threads=args.threads,
                         shard=args.shard, num_shards=args.num_shards, resume=args.resume)
