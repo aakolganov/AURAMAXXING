@@ -176,9 +176,10 @@ python -m runner config.yaml --num-shards 4 --shard 0 --workers 8 --threads 1
 ```
 
 Keep `workers * threads <= cores_per_node`. For CPU MACE, prefer one slab per node
-(`--workers 1 --threads <cores>`) so each evaluation uses the whole node; parallelism then
-comes from the array. A ready-to-edit job-array template is in
-`examples/slurm/generate_array.sbatch`.
+(`--workers 1 --threads <cores>`) so each evaluation uses the whole node and the model is
+loaded once per node; parallelism then comes from the array. See
+`examples/config/siral70_mace_cpu.yaml` for that pattern and
+`examples/slurm/generate_array.sbatch` for a ready-to-edit job-array template.
 
 After a sharded run, build the single pooled report (and merge the per-shard manifests)
 once with `python -m runner config.yaml --pool-only`.
