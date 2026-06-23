@@ -184,6 +184,18 @@ loaded once per node; parallelism then comes from the array. See
 After a sharded run, build the single pooled report (and merge the per-shard manifests)
 once with `python -m runner config.yaml --pool-only`.
 
+**MACE on GPU + CPU workers (`--remote`).** With a GPU, `--remote` evaluates the MACE
+calculator in one process that owns the model on the device, while `--workers` CPU processes
+run the placement/optimization control flow and proxy their force/energy calls to it:
+
+```bash
+python -m runner config.yaml --remote --device cuda --workers 8 --threads 1
+```
+
+The GPU is fed by all workers (so it stays busy), the workers never touch CUDA, and any
+non-MACE stage (e.g. LAMMPS/BKS growth) still runs locally on the worker's CPU. Sharding,
+manifests and `--pool-only` work the same way.
+
 ## Statistics & plots
 
 With `statistics.enabled` (on by default) the runner writes a set of diagnostic plots +

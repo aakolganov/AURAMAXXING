@@ -32,6 +32,12 @@ def main(argv: Optional[list] = None) -> int:
                              "Requires --shard.")
     parser.add_argument("--shard", type=int, default=None, metavar="I",
                         help="which shard [0, N) this task runs. Requires --num-shards.")
+    parser.add_argument("--remote", action="store_true",
+                        help="scenario 3: evaluate the MACE calculator in one GPU process and "
+                             "run --workers CPU processes that proxy their force/energy calls "
+                             "to it. Use --device to pick the evaluator device.")
+    parser.add_argument("--device", default="cuda", metavar="DEV",
+                        help="device for the --remote evaluator's model (default cuda).")
     args = parser.parse_args(argv)
 
     # Apply before generation: the heavy backends (LAMMPS, torch/MACE) import lazily in
@@ -65,8 +71,13 @@ def main(argv: Optional[list] = None) -> int:
     if args.dry_run:
         return 0
 
-    run_from_config(cfg, workers=args.workers, threads=args.threads,
-                    shard=args.shard, num_shards=args.num_shards)
+    if args.remote:
+        from .remote_run import run_remote_from_config
+        run_remote_from_config(cfg, workers=args.workers, worker_threads=args.threads,
+                               device=args.device, shard=args.shard, num_shards=args.num_shards)
+    else:
+        run_from_config(cfg, workers=args.workers, threads=args.threads,
+                        shard=args.shard, num_shards=args.num_shards)
     return 0
 
 

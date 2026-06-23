@@ -39,6 +39,14 @@ python -m runner "$CONFIG" \
     --num-shards "$NUM_SHARDS" --shard "$SHARD" \
     --workers "$WORKERS" --threads "$THREADS"
 
+# --- Scenario 3 -- MACE on GPU + CPU workers (replaces the call above) ---------------
+# Add `#SBATCH --gres=gpu:1` at the top. One evaluator process owns the model on the GPU;
+# --workers CPU processes run placement and proxy their MACE evals to it (--threads each).
+#
+#   python -m runner "$CONFIG" --remote --device cuda \
+#       --num-shards "$NUM_SHARDS" --shard "$SHARD" \
+#       --workers "$SLURM_CPUS_PER_TASK" --threads 1
+
 # --- reduce step (run ONCE, after all array tasks finish) ----------------------------
 # Gathers every per-structure metrics.json into the single pooled report and merges the
 # per-shard manifests into manifest.json. Submit as a dependent job, e.g.:
