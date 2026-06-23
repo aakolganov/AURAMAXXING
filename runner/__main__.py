@@ -32,6 +32,9 @@ def main(argv: Optional[list] = None) -> int:
                              "Requires --shard.")
     parser.add_argument("--shard", type=int, default=None, metavar="I",
                         help="which shard [0, N) this task runs. Requires --num-shards.")
+    parser.add_argument("--resume", action="store_true",
+                        help="skip combinations whose output file already exists (re-run an "
+                             "interrupted/failed sweep without redoing finished slabs).")
     parser.add_argument("--remote", action="store_true",
                         help="scenario 3: evaluate the MACE calculator in one GPU process and "
                              "run --workers CPU processes that proxy their force/energy calls "
@@ -74,10 +77,11 @@ def main(argv: Optional[list] = None) -> int:
     if args.remote:
         from .remote_run import run_remote_from_config
         run_remote_from_config(cfg, workers=args.workers, worker_threads=args.threads,
-                               device=args.device, shard=args.shard, num_shards=args.num_shards)
+                               device=args.device, shard=args.shard, num_shards=args.num_shards,
+                               resume=args.resume)
     else:
         run_from_config(cfg, workers=args.workers, threads=args.threads,
-                        shard=args.shard, num_shards=args.num_shards)
+                        shard=args.shard, num_shards=args.num_shards, resume=args.resume)
     return 0
 
 

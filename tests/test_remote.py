@@ -51,6 +51,26 @@ def test_remote_evaluator_roundtrip(make_struct, tmp_path):
         evaluator.join(timeout=30)
 
 
+def test_remote_timeout_fails_fast(tmp_path):
+    # No evaluator consumes the request, so the response never arrives: the proxy must raise
+    # (not hang) once the timeout elapses, turning a dead evaluator into a failed slab.
+    import time
+    import pytest
+    from ase import Atoms
+    from interfaces.remote_calculator import RemoteCalculator
+
+    ctx = mp.get_context("spawn")
+    manager = ctx.Manager()
+    rc = RemoteCalculator(manager.Queue(), manager.Queue(), 0,
+                          dump_path=str(tmp_path / "d"), timeout=0.5)
+    atoms = Atoms("Si2", positions=[[0, 0, 0], [1.6, 0, 0]], cell=[10, 10, 10], pbc=True)
+    atoms.calc = rc.calc
+    t = time.time()
+    with pytest.raises(RuntimeError, match="did not respond"):
+        atoms.get_potential_energy()
+    assert time.time() - t < 5.0       # failed fast, did not hang
+
+
 def test_run_remote_end_to_end(tmp_path):
     # Full scenario-3 path: one evaluator process + a 2-worker CPU pool, on CPU via LJ.
     cfg = _remote_cfg(tmp_path, seeds=[0, 1])

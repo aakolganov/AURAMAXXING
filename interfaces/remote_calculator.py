@@ -10,6 +10,7 @@ thin proxy (``RemoteASECalculator``) that round-trips each ``calculate`` to the 
 ``evaluator_loop`` is the server side. IPC is via ``multiprocessing.Manager`` queues (their
 proxies are picklable, so they survive the spawn start method that CUDA requires).
 """
+import queue as _queue
 from pathlib import Path
 
 import numpy as np
@@ -18,17 +19,24 @@ from ase.calculators.calculator import Calculator, all_changes
 
 from interfaces.base_interface import CalculatorInterface
 
+# Default per-call ceiling: how long a worker waits for the evaluator before giving up.
+# Generous (a single MACE eval is seconds at most); its job is to turn a dead/wedged
+# evaluator into a failed slab instead of a job that hangs until SLURM wall-time.
+DEFAULT_RESPONSE_TIMEOUT = 600.0
+
 
 class RemoteASECalculator(Calculator):
     """ASE calculator proxy: ships (numbers, positions, cell, pbc) to the evaluator process
     and blocks on this worker's response queue for the energy + forces."""
     implemented_properties = ["energy", "free_energy", "forces"]
 
-    def __init__(self, request_q, response_q, worker_id: int, **kwargs):
+    def __init__(self, request_q, response_q, worker_id: int,
+                 timeout: float = DEFAULT_RESPONSE_TIMEOUT, **kwargs):
         super().__init__(**kwargs)
         self._request_q = request_q
         self._response_q = response_q
         self._worker_id = worker_id
+        self._timeout = timeout
 
     def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
         super().calculate(atoms, properties, system_changes)
@@ -39,7 +47,12 @@ class RemoteASECalculator(Calculator):
             "cell": np.asarray(atoms.get_cell()),
             "pbc": np.asarray(atoms.get_pbc()),
         })
-        result = self._response_q.get()
+        try:
+            result = self._response_q.get(timeout=self._timeout)
+        except _queue.Empty:
+            raise RuntimeError(
+                f"remote evaluator did not respond within {self._timeout:.0f}s "
+                f"(evaluator dead or wedged)")
         if "error" in result:
             raise RuntimeError(f"remote evaluator failed: {result['error']}")
         energy = float(result["energy"])
@@ -51,8 +64,9 @@ class RemoteCalculator(CalculatorInterface):
     force/energy evaluations are served by a remote evaluator process. Inherits the base
     optimize/anneal unchanged -- they only ever touch ``self.calc``, which is the proxy."""
 
-    def __init__(self, request_q, response_q, worker_id: int, dump_path: str = "dump"):
-        self.calc = RemoteASECalculator(request_q, response_q, worker_id)
+    def __init__(self, request_q, response_q, worker_id: int, dump_path: str = "dump",
+                 timeout: float = DEFAULT_RESPONSE_TIMEOUT):
+        self.calc = RemoteASECalculator(request_q, response_q, worker_id, timeout=timeout)
         self.dump_path = Path(dump_path)
         self.dump_path.mkdir(parents=True, exist_ok=True)
 

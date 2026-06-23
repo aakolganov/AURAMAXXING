@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Optional, Union
 
 from .config import RunConfig, load_config
-from .runner import (resolve_plan, build_calculator, _shard_plan, _run_entry,
-                     _write_manifest, _pool_stats)
+from .runner import (resolve_plan, build_calculator, _shard_plan, _partition_resume,
+                     _skipped_record, _run_entry, _write_manifest, _pool_stats)
 from interfaces.remote_calculator import RemoteCalculator, evaluator_loop
 
 
@@ -80,14 +80,18 @@ def run_remote_from_config(source: Union[str, Path, dict, RunConfig], *,
                            workers: int = 1, worker_threads: Optional[int] = 1,
                            device: str = "cuda", evaluator_threads: Optional[int] = None,
                            calc_factory=None, shard: Optional[int] = None,
-                           num_shards: Optional[int] = None) -> list[Path]:
+                           num_shards: Optional[int] = None, resume: bool = False) -> list[Path]:
     """Run the sweep with MACE evaluated on ``device`` by one evaluator process feeding a pool
     of ``workers`` CPU processes. ``worker_threads`` caps each worker's threads (they only do
-    placement, so 1 is usually right); ``evaluator_threads`` caps the evaluator's. Sharding,
-    manifest and pooling behave exactly as in ``run_from_config``.
+    placement, so 1 is usually right); ``evaluator_threads`` caps the evaluator's. ``resume``
+    skips combinations whose output already exists. Sharding, manifest and pooling behave
+    exactly as in ``run_from_config``.
     """
     cfg = source if isinstance(source, RunConfig) else load_config(source)
     plan = _shard_plan(resolve_plan(cfg), shard, num_shards)
+    plan, done = _partition_resume(plan, resume)
+    if done:
+        print(f"[runner] resume: skipping {len(done)} already-written structures")
     factory = calc_factory or _default_remote_factory(cfg)
 
     # CUDA cannot be initialised after fork, so the evaluator and the pool both use spawn.
@@ -114,7 +118,8 @@ def run_remote_from_config(source: Union[str, Path, dict, RunConfig], *,
         if evaluator.is_alive():
             evaluator.terminate()
 
-    written = [Path(r["output_path"]) for r in records if r["status"] == "ok"]
+    records += [_skipped_record(e) for e in done]
+    written = [Path(r["output_path"]) for r in records if r["status"] in ("ok", "skipped")]
     _write_manifest(cfg, records, shard=shard, num_shards=num_shards)
     if cfg.statistics.enabled and cfg.statistics.pooled:
         if num_shards is None:
