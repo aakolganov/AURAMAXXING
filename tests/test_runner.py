@@ -78,6 +78,27 @@ def test_run_from_config_end_to_end(tmp_path, monkeypatch):
         assert len(atoms) == 45                    # grew to the requested size
         pos = atoms.get_positions()
         assert np.all(np.isfinite(pos))
+        # statistics are on by default -> per-structure plots + stats.json next to it
+        assert (path.parent / "coordination.png").exists()
+        assert (path.parent / "stats.json").exists()
+    # pooled report for the >1-structure sweep, at the run output_dir
+    assert (tmp_path / "out" / "stats_pooled.json").exists()
+
+
+def test_statistics_per_structure_off_keeps_pooled(tmp_path, monkeypatch):
+    from tests.dummy_interface import DummyInterface
+    monkeypatch.setattr("runner.runner.build_calculator",
+                        lambda spec: DummyInterface(dump_path=str(tmp_path / "dump")))
+    cfg = _blank_cfg(tmp_path, seeds=[0, 1])
+    cfg.statistics.per_structure = False    # skip per-structure plots; keep the pooled set
+    written = run_from_config(cfg)
+
+    assert len(written) == 2
+    for path in written:                     # no per-structure plots/json next to structures
+        assert not (path.parent / "coordination.png").exists()
+        assert not (path.parent / "stats.json").exists()
+    assert (tmp_path / "out" / "stats_pooled.json").exists()    # pooled still produced
+    assert (tmp_path / "out" / "coordination.png").exists()
 
 
 # --- CLI ---------------------------------------------------------------------------

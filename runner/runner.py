@@ -198,13 +198,45 @@ def run_from_config(source: Union[str, Path, dict, RunConfig]) -> list[Path]:
     sat_calc = build_calculator(cfg.calculators.saturation) if cfg.calculators.saturation else growth_calc
 
     written: list[Path] = []
+    all_metrics: list = []
     for entry in plan:
         out_path = entry["output_path"]
         try:
-            _generate_one(cfg, entry["seed"], entry["alpha"], out_path, growth_calc, sat_calc)
+            struct = _generate_one(cfg, entry["seed"], entry["alpha"], out_path, growth_calc, sat_calc)
             written.append(out_path)
             print(f"[runner] wrote {out_path}")
+            if cfg.statistics.enabled:
+                # per_structure: write the plots+json next to each structure.
+                # When off, still compute metrics (cheap) so the pooled set can be built
+                # without the per-structure files multiplying across a large ensemble.
+                m = _write_stats(struct, out_path.parent, cfg.saturation.enabled,
+                                 label=out_path.parent.name,
+                                 write_files=cfg.statistics.per_structure)
+                if m is not None:
+                    all_metrics.append(m)
         except Exception as exc:   # keep the sweep going; report what was skipped
             print(f"[runner] FAILED seed={entry['seed']} alpha={entry['alpha']}: "
                   f"{type(exc).__name__}: {exc}")
+
+    if cfg.statistics.enabled and cfg.statistics.pooled and len(all_metrics) > 1:
+        try:
+            from stats import write_pooled_report
+            write_pooled_report(all_metrics, Path(cfg.run.output_dir), cfg.saturation.enabled)
+            print(f"[runner] wrote pooled statistics to {cfg.run.output_dir}")
+        except Exception as exc:
+            print(f"[runner] pooled statistics FAILED: {type(exc).__name__}: {exc}")
     return written
+
+
+def _write_stats(struct, out_dir, is_saturation: bool, label: str, write_files: bool = True):
+    """Return per-structure metrics (for pooling). When ``write_files`` is True also write
+    the plots + stats.json next to the structure. Never aborts the run on a stats failure."""
+    try:
+        if write_files:
+            from stats import write_report
+            return write_report(struct, out_dir, is_saturation=is_saturation, label=label)
+        from stats import analyze_structure
+        return analyze_structure(struct, is_saturation=is_saturation)
+    except Exception as exc:
+        print(f"[runner] statistics FAILED for {out_dir}: {type(exc).__name__}: {exc}")
+        return None
