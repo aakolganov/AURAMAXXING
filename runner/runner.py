@@ -220,6 +220,24 @@ def _shard_plan(plan: list, shard: Optional[int], num_shards: Optional[int]) -> 
     return plan[shard::num_shards]
 
 
+def _partition_resume(plan: list, resume: bool) -> tuple[list, list]:
+    """Split the plan into (todo, already_done). With ``resume`` on, an entry whose output
+    file already exists is skipped, so an interrupted/failed sweep can be re-run without
+    redoing finished slabs. Skipped entries still appear in the manifest (status 'skipped')
+    and their on-disk metrics.json are still picked up by the pooled report."""
+    if not resume:
+        return plan, []
+    todo, done = [], []
+    for entry in plan:
+        (done if entry["output_path"].exists() else todo).append(entry)
+    return todo, done
+
+
+def _skipped_record(entry: dict) -> dict:
+    return {"seed": entry["seed"], "alpha": entry["alpha"],
+            "output_path": str(entry["output_path"]), "status": "skipped"}
+
+
 def _run_entry(cfg: RunConfig, entry: dict, growth_calc, sat_calc) -> dict:
     """Generate one slab and write its statistics. Returns a manifest record (never raises);
     a failure is captured in the record so a parallel sweep keeps going."""
@@ -271,34 +289,39 @@ def _worker_run(entry: dict) -> dict:
 def run_from_config(source: Union[str, Path, dict, RunConfig], *,
                     workers: int = 1, threads: Optional[int] = None,
                     shard: Optional[int] = None, num_shards: Optional[int] = None,
-                    calc_provider=None) -> list[Path]:
+                    resume: bool = False, calc_provider=None) -> list[Path]:
     """Run the full pipeline for every seed/roughness combination in the config.
 
     ``shard``/``num_shards`` restrict this run to a deterministic slice of the plan (one
     SLURM array task per shard). ``workers`` runs that slice across an in-node process pool
     (each worker builds its own calculators); ``threads`` caps compute threads per process.
-    ``calc_provider(cfg) -> (growth_calc, sat_calc)`` overrides how calculators are built; it
-    must be a module-level (picklable) callable when ``workers > 1``.
+    ``resume`` skips combinations whose output already exists. ``calc_provider(cfg) ->
+    (growth_calc, sat_calc)`` overrides how calculators are built; it must be a module-level
+    (picklable) callable when ``workers > 1``.
 
-    Returns the list of written output paths. A combination that fails is logged and skipped
-    rather than aborting the whole sweep. When sharded, the pooled report is left to a final
-    ``--pool-only`` reduce (no single task sees every structure).
+    Returns the list of present output paths (newly written + resumed). A combination that
+    fails is logged and skipped rather than aborting the whole sweep. When sharded, the pooled
+    report is left to a final ``--pool-only`` reduce (no single task sees every structure).
     """
     cfg = source if isinstance(source, RunConfig) else load_config(source)
     plan = _shard_plan(resolve_plan(cfg), shard, num_shards)
+    todo, done = _partition_resume(plan, resume)
+    if done:
+        print(f"[runner] resume: skipping {len(done)} already-written of {len(plan)} structures")
     provider = calc_provider or _default_calc_provider
 
     if workers and workers > 1:
         with ProcessPoolExecutor(max_workers=workers, initializer=_worker_init,
                                  initargs=(cfg, threads, provider)) as ex:
-            records = list(ex.map(_worker_run, plan))
+            records = list(ex.map(_worker_run, todo))
     else:
         from .threads import configure_threads
         configure_threads(threads)
         growth_calc, sat_calc = provider(cfg)
-        records = [_run_entry(cfg, entry, growth_calc, sat_calc) for entry in plan]
+        records = [_run_entry(cfg, entry, growth_calc, sat_calc) for entry in todo]
 
-    written = [Path(r["output_path"]) for r in records if r["status"] == "ok"]
+    records += [_skipped_record(e) for e in done]
+    written = [Path(r["output_path"]) for r in records if r["status"] in ("ok", "skipped")]
     _write_manifest(cfg, records, shard=shard, num_shards=num_shards)
 
     # A single shard only ever sees its own slabs, so pooling there would be incomplete and
@@ -331,6 +354,7 @@ def _write_manifest(cfg: RunConfig, records: list[dict],
         "num_shards": num_shards,
         "total": len(records),
         "succeeded": sum(1 for r in records if r["status"] == "ok"),
+        "skipped": sum(1 for r in records if r["status"] == "skipped"),
         "failed": sum(1 for r in records if r["status"] == "failed"),
         "combos": records,
     }
@@ -356,6 +380,7 @@ def _merge_manifests(out_root: Path) -> Optional[Path]:
         "shards": len(shard_files),
         "total": len(combos),
         "succeeded": sum(1 for c in combos if c["status"] == "ok"),
+        "skipped": sum(1 for c in combos if c["status"] == "skipped"),
         "failed": sum(1 for c in combos if c["status"] == "failed"),
         "combos": combos,
     }
