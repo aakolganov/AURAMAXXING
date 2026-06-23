@@ -124,6 +124,36 @@ def select_idx_for_move(amorphous_struct: AmorphousStruc,
     return idx_furthest, chosen_idx
 
 
+def _fixed_indices(amorphous_struct) -> set:
+    fixed: set = set()
+    for constraint in amorphous_struct.atoms.constraints:
+        if hasattr(constraint, "get_indices"):
+            fixed.update(int(i) for i in constraint.get_indices())
+    return fixed
+
+
+def _prune_orphans_from_move(amorphous_struct, cn_before, n_before: int) -> int:
+    """Remove atoms that the move in this iteration orphaned and the re-cap did not fix.
+
+    ``correct_charge`` pushes an atom a bond-length away from a neighbour to break a bond; if
+    that neighbour had no other bonds it is left isolated (CN 0). The loop then tries to re-cap
+    it with an H/OH, but when that placement fails the atom stays dangling and would later
+    crash move selection. Here we drop exactly those: atoms present before the move (index <
+    ``n_before``), not fixed, that were bonded before but are isolated now. Atoms placed by the
+    re-cap (index >= ``n_before``) and pre-existing isolated atoms are left untouched."""
+    amorphous_struct.get_graph(force_rebuild=True)
+    cn_now = amorphous_struct.get_cn()
+    fixed = _fixed_indices(amorphous_struct)
+    orphans = [i for i in range(n_before)
+               if i not in fixed and cn_before[i] > 0 and cn_now[i] == 0]
+    if not orphans:
+        return 0
+    mask = np.zeros(len(amorphous_struct), dtype=bool)
+    mask[orphans] = True
+    amorphous_struct.remove_atom(mask)
+    return len(orphans)
+
+
 def find_tetrogonal_sites(amorphous_struct: AmorphousStruc) -> list[int]:
     """
     Identifies atoms that have coordination number strictly greater than their minimum
@@ -228,6 +258,8 @@ def correct_charge(
                   "against); stopping.")
             break
         chosen_idx_pos, idx_furthest = move
+        cn_before = amorphous_struct.get_cn()
+        n_before = len(amorphous_struct)
         move_atom(
             amorphous_struct,
             idx_move=chosen_idx_pos,
@@ -235,12 +267,17 @@ def correct_charge(
             dist_move=d_min_max[amorphous_struct.atoms[chosen_idx_pos].symbol][amorphous_struct.atoms[idx_furthest].symbol][0]+0.2,
             alpha=move_alpha,
             )
-        
+
         attach_idx = idx_furthest
         if current_charge > 0:
             try_then_force_place("O", attach_idx)
-            attach_idx = len(amorphous_struct) - 1 
+            attach_idx = len(amorphous_struct) - 1
         try_then_force_place("H", attach_idx)
+        # Drop any atom the move orphaned that the re-cap above failed to bond, so it can't
+        # dangle in the output or crash a later iteration's move selection.
+        removed = _prune_orphans_from_move(amorphous_struct, cn_before, n_before)
+        if removed:
+            print(f"correct_charge: pruned {removed} atom(s) orphaned by a move and not re-capped")
         current_charge = amorphous_struct.charge()
 
     amorphous_struct.sort_atoms()
