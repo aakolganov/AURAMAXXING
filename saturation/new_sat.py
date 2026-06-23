@@ -1,3 +1,5 @@
+from typing import Optional
+
 from base.amorphous_structure import AmorphousStruc
 import numpy as np
 from helpers.files_io import highlight_coordination
@@ -101,12 +103,21 @@ def collect_over_or_under_cn_atoms(amorphous_struct: AmorphousStruc, do_under: b
     return cn_dict
 
 
-def select_idx_for_move(amorphous_struct: AmorphousStruc, idx_selection: list[int]) -> tuple[int, int]:
-    chosen_idx = amorphous_struct.rng.choice(idx_selection)
+def select_idx_for_move(amorphous_struct: AmorphousStruc,
+                        idx_selection: list[int]) -> Optional[tuple[int, int]]:
+    """Pick an (atom_to_move, pivot_neighbour) pair from ``idx_selection``. The move pivots on
+    the chosen atom's furthest-bonded neighbour, so only atoms that actually have a neighbour
+    are eligible. Returns ``None`` when none of the candidates is bonded to anything (e.g. an
+    isolated under-coordinated atom), so the caller can stop gracefully instead of taking
+    ``argmax`` of an empty neighbour list."""
     graph = amorphous_struct.get_graph()
+    movable = [i for i in idx_selection if graph.degree(i) > 0]
+    if not movable:
+        return None
+    chosen_idx = amorphous_struct.rng.choice(movable)
     neighbors = list(graph.neighbors(chosen_idx))
     dists = [amorphous_struct.atoms.get_distance(chosen_idx, n, mic=True) for n in neighbors]
-    idx_furthest = neighbors[np.argmax(dists)]
+    idx_furthest = neighbors[int(np.argmax(dists))]
 
     if amorphous_struct.get_cn(chosen_idx) < amorphous_struct.get_cn(idx_furthest):
         return chosen_idx, idx_furthest
@@ -211,7 +222,12 @@ def correct_charge(
             print("correct_charge: no candidate atoms left to adjust the charge; stopping.")
             break
 
-        chosen_idx_pos, idx_furthest = select_idx_for_move(amorphous_struct, indices)
+        move = select_idx_for_move(amorphous_struct, indices)
+        if move is None:
+            print("correct_charge: candidate atoms are all isolated (no neighbour to move "
+                  "against); stopping.")
+            break
+        chosen_idx_pos, idx_furthest = move
         move_atom(
             amorphous_struct,
             idx_move=chosen_idx_pos,

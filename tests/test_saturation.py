@@ -65,3 +65,22 @@ def test_correct_charge_terminates_when_unsatisfiable(make_struct):
     assert s.charge() != 0
     correct_charge(s, max_iterations=50)   # returns via the no-candidate / cap guard
     assert isinstance(s.charge(), (int, float))
+
+
+# --- isolated atoms must not crash charge-correction's move selection -------------
+# Regression for `np.argmax of an empty sequence`: correct_charge feeds under-coordinated
+# atoms to select_idx_for_move, which pivots on the chosen atom's furthest neighbour. An
+# isolated (CN 0) candidate has no neighbour, so argmax([]) used to crash the whole slab.
+
+def test_select_idx_for_move_skips_isolated_atoms(make_struct):
+    from saturation.new_sat import select_idx_for_move
+
+    # every candidate isolated -> None (caller stops gracefully), no crash
+    s = make_struct(["Si", "O"], [[2, 2, 2], [10, 10, 10]], cell=(14.0, 14.0, 14.0))
+    assert select_idx_for_move(s, [0, 1]) is None
+
+    # a bonded pair (0,1) plus an isolated candidate (2): the isolated one is never chosen
+    s2 = make_struct(["Si", "O", "O"], [[5, 5, 5], [6.6, 5, 5], [11, 11, 11]],
+                     cell=(14.0, 14.0, 14.0))
+    pair = select_idx_for_move(s2, [0, 1, 2])
+    assert pair is not None and set(pair) <= {0, 1}
