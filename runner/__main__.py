@@ -5,7 +5,7 @@ import sys
 from typing import Optional
 
 from .config import load_config
-from .runner import resolve_plan, run_from_config, pool_from_config
+from .runner import resolve_plan, run_from_config, pool_from_config, _shard_plan
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -24,6 +24,14 @@ def main(argv: Optional[list] = None) -> int:
                         help="limit compute threads per process to N (OMP/BLAS env + torch). "
                              "Use 1 for an in-node pool of many workers; cores-per-node for "
                              "one slab per node. Keep workers*threads <= cores_per_node.")
+    parser.add_argument("--workers", type=int, default=1, metavar="W",
+                        help="in-node process pool size: run W slabs at once (default 1 = serial). "
+                             "Each worker builds its own calculator.")
+    parser.add_argument("--num-shards", type=int, default=None, metavar="N",
+                        help="split the plan into N disjoint shards (one SLURM array task each). "
+                             "Requires --shard.")
+    parser.add_argument("--shard", type=int, default=None, metavar="I",
+                        help="which shard [0, N) this task runs. Requires --num-shards.")
     args = parser.parse_args(argv)
 
     # Apply before generation: the heavy backends (LAMMPS, torch/MACE) import lazily in
@@ -42,8 +50,13 @@ def main(argv: Optional[list] = None) -> int:
         pool_from_config(cfg)
         return 0
 
-    plan = resolve_plan(cfg)
-    print(f"Resolved {len(plan)} structure(s) from {args.config}:")
+    try:
+        plan = _shard_plan(resolve_plan(cfg), args.shard, args.num_shards)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    shard_note = "" if args.num_shards is None else f" (shard {args.shard}/{args.num_shards})"
+    print(f"Resolved {len(plan)} structure(s) from {args.config}{shard_note}:")
     for entry in plan:
         alpha = entry["alpha"]
         alpha_str = f"{alpha:.3f}" if alpha is not None else "flat"
@@ -52,7 +65,8 @@ def main(argv: Optional[list] = None) -> int:
     if args.dry_run:
         return 0
 
-    run_from_config(cfg)
+    run_from_config(cfg, workers=args.workers, threads=args.threads,
+                    shard=args.shard, num_shards=args.num_shards)
     return 0
 
 

@@ -24,3 +24,10 @@ class DummyInterface(CalculatorInterface):
         # Soft, short-ranged LJ: enough to give finite forces for LBFGS/Langevin
         # without blowing up on the ~1.6 A bonds these structures contain.
         self.calc = LennardJones(sigma=1.5, epsilon=0.01, rc=6.0)
+
+
+def dummy_calc_provider(cfg):
+    """A module-level (picklable) calc_provider for run_from_config's process pool: under
+    spawn the workers import this by reference, so the pool can be tested without LAMMPS."""
+    calc = DummyInterface(dump_path=str(Path(cfg.run.output_dir) / "_dump"))
+    return calc, calc

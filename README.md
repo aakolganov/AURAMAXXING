@@ -157,6 +157,32 @@ combination is written straight to `output_dir/structure.<ext>`. Unknown or miss
 raise a clear error naming the offending path — use `--dry-run` to validate quickly without
 LAMMPS/MACE. See `examples/config/sio2.yaml` and `examples/config/siral70.yaml`.
 
+## Running in parallel (HPC)
+
+Each slab in the sweep is independent, so a large ensemble parallelises two ways that
+compose:
+
+- **Across nodes** — `--num-shards N --shard I` runs a disjoint slice of the plan
+  (`plan[I::N]`), one SLURM array task per shard. The union of shards is the whole sweep
+  with no overlap.
+- **Within a node** — `--workers W` runs W slabs at once in a process pool; each worker
+  builds its own calculator.
+
+```bash
+# one node, 8 slabs at a time, single-threaded each (CPU LAMMPS)
+python -m runner config.yaml --workers 8 --threads 1
+# this node's share of a 4-way sharded sweep
+python -m runner config.yaml --num-shards 4 --shard 0 --workers 8 --threads 1
+```
+
+Keep `workers * threads <= cores_per_node`. For CPU MACE, prefer one slab per node
+(`--workers 1 --threads <cores>`) so each evaluation uses the whole node; parallelism then
+comes from the array. A ready-to-edit job-array template is in
+`examples/slurm/generate_array.sbatch`.
+
+After a sharded run, build the single pooled report (and merge the per-shard manifests)
+once with `python -m runner config.yaml --pool-only`.
+
 ## Statistics & plots
 
 With `statistics.enabled` (on by default) the runner writes a set of diagnostic plots +
