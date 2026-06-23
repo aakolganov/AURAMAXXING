@@ -127,6 +127,11 @@ charge_correction: {enabled: false, max_iterations: 1000, num_samples: 250, move
 
 statistics:        {enabled: true, per_structure: true, pooled: true}   # analysis plots + stats.json
 
+debug:             {write_growth_dumps: false, write_trajectories: false} # optional; off by default
+# write_growth_dumps: per-atom xyz snapshot after every placement (many files, heavy I/O)
+# write_trajectories: anneal + finalize trajectory files. Both are debug-only; keep off
+# for large/parallel ensembles. Trajectories/logs are written into each structure's own dir.
+
 rules:                      # optional list, applied after saturation
   - {type: avoid_motif, edge_element: Al, center_element: O, swap_candidate: Si}
   - {type: min_distance, min_dist: 1.4}
@@ -162,6 +167,15 @@ a `stats.json` next to each structure, and a pooled set across the sweep in `out
 For large ensembles, set `statistics.per_structure: false` to skip the per-structure plots
 (which multiply with every structure) while still getting the single pooled set; or
 `statistics.enabled: false` to turn analysis off entirely.
+
+The pooled report is built by gathering the per-structure `metrics.json` files off disk, so
+it is correct no matter how the structures were produced. After a parallel/sharded run (where
+each task generates a subset of the slabs into a shared `output_dir`), build the single pooled
+report once with:
+
+```bash
+python -m runner config.yaml --pool-only   # gather metrics.json under output_dir -> pooled report
+```
 
 The same analysis runs standalone on any saved structure:
 

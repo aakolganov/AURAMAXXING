@@ -41,6 +41,26 @@ def test_pooled_report(tmp_path):
     assert data["summary"]["n_structures"] == 2
 
 
+def test_pool_reports_from_dir_gathers_subdirs(tmp_path):
+    # The parallel-collection path: separate workers each drop a metrics.json into their
+    # own subdir; the reduce step gathers them off disk into one pooled report.
+    from stats import write_metrics, pool_reports_from_dir
+    for i in range(3):
+        write_metrics(tmp_path / f"seed{i}", analyze_structure(_struct()))
+
+    merged = pool_reports_from_dir(tmp_path)
+    assert merged is not None
+    data = json.loads((tmp_path / "stats_pooled.json").read_text())
+    assert data["summary"]["n_structures"] == 3
+    assert GEN_PNGS <= {p.name for p in tmp_path.iterdir()}
+
+
+def test_pool_reports_from_dir_needs_two(tmp_path):
+    from stats import write_metrics, pool_reports_from_dir
+    write_metrics(tmp_path / "only", analyze_structure(_struct()))
+    assert pool_reports_from_dir(tmp_path) is None          # nothing to pool from one
+
+
 def test_cli_on_structure_file(tmp_path):
     from stats.__main__ import main
     # write a structure to a POSCAR, then analyse it via the CLI

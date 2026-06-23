@@ -181,11 +181,15 @@ class LMPInterface(CalculatorInterface):
     def anneal(self, atoms: Atoms, T_ini: float, T_fin: float,
             steps: int = 500, dt: float = 1.0,
             logfile: str = "log.log", traj_name: Optional[str] = None, traj_fmt: Optional[str] = None,
+            workdir: Optional[Path] = None,
             **kwargs: Any) -> Atoms:
         """
         Anneal the structure with the BKS/LAMMPS potential: initialise velocities at
         T_ini and ramp the thermostat target linearly down to T_fin over `steps` MD
         steps. Use T_ini > T_fin for a melt-and-quench.
+
+        ``workdir`` overrides ``self.dump_path`` for the trajectory so concurrent slabs
+        never write to the same file.
         """
         print("Starting Anneal")
         traj_interval = kwargs.pop('interval', 1)
@@ -200,7 +204,7 @@ class LMPInterface(CalculatorInterface):
 
         md = VelocityVerlet(atoms, dt * fs)
         if traj_name:
-            self._attach_trajectory(md, atoms, traj_name, traj_fmt, interval=traj_interval)
+            self._attach_trajectory(md, atoms, traj_name, traj_fmt, interval=traj_interval, workdir=workdir)
 
         # Single monotonic schedule hot -> cold. The previous implementation held the
         # target at T_fin for the whole "cooling" phase, so the structure was heated

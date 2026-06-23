@@ -8,7 +8,7 @@ or from the command line on a saved structure:
     python -m stats structure.vasp --out stats_dir [--saturation]
 """
 from .metrics import analyze_structure, merge_metrics, summarize
-from .report import write_report, write_pooled_report
+from .report import write_report, write_metrics, write_pooled_report, pool_reports_from_dir
 
 __all__ = ["analyze_structure", "merge_metrics", "summarize",
-           "write_report", "write_pooled_report"]
+           "write_report", "write_metrics", "write_pooled_report", "pool_reports_from_dir"]

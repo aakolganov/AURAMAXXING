@@ -5,7 +5,7 @@ import sys
 from typing import Optional
 
 from .config import load_config
-from .runner import resolve_plan, run_from_config
+from .runner import resolve_plan, run_from_config, pool_from_config
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -16,6 +16,10 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("config", help="path to the YAML configuration file")
     parser.add_argument("--dry-run", action="store_true",
                         help="validate the config and print the per-structure plan without running")
+    parser.add_argument("--pool-only", action="store_true",
+                        help="skip generation; gather the per-structure metrics.json already "
+                             "under the output dir and (re)write the pooled report. Run once "
+                             "after a parallel/sharded sweep finishes.")
     args = parser.parse_args(argv)
 
     try:
@@ -23,6 +27,10 @@ def main(argv: Optional[list] = None) -> int:
     except (ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
+    if args.pool_only:
+        pool_from_config(cfg)
+        return 0
 
     plan = resolve_plan(cfg)
     print(f"Resolved {len(plan)} structure(s) from {args.config}:")

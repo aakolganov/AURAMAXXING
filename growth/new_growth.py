@@ -24,9 +24,15 @@ def grow_structure(
         per_anchor_attempts: int = 100,
         num_samples: int = 100,
         anneal_params: Optional[dict] = None,
-        output_dir: Path = Path("growth")
+        output_dir: Path = Path("growth"),
+        workdir: Optional[Path] = None,
+        write_growth_dumps: bool = False,
+        write_trajectories: bool = False,
     ):
-    if not output_dir.exists():
+    # ``workdir`` is this slab's own directory; anneal logs/trajectories go there so
+    # concurrent runs never collide. ``write_growth_dumps``/``write_trajectories`` gate
+    # the debug-only per-atom snapshots and MD trajectories (heavy I/O on large runs).
+    if write_growth_dumps and not output_dir.exists():
         os.makedirs(output_dir, exist_ok=True)
 
     if calculator is None:
@@ -83,15 +89,17 @@ def grow_structure(
             
             if placement_success:
                 pbar.update(1)
-                write_structure_to_file(amorphous_struct, output_dir/f"dump_{num_placement_attempts}", write_xyz=True)
+                if write_growth_dumps:
+                    write_structure_to_file(amorphous_struct, output_dir/f"dump_{num_placement_attempts}", write_xyz=True)
 
             else:
                 # Melt-and-quench to relieve the steric jam: start hot, cool to ~RT.
                 calculator.anneal(
                     amorphous_struct.atoms,
                     logfile="log.log",
-                    traj_name="traj",
+                    traj_name="traj" if write_trajectories else None,
                     traj_fmt="xyz",
+                    workdir=workdir,
                     **anneal_params,
                     )
 
@@ -110,6 +118,8 @@ def finalize_structure(
     fmax: float = 0.1,
     max_steps: int = 500,
     traj_interval: int = 1,
+    workdir: Optional[Path] = None,
+    write_trajectories: bool = False,
     ):
     if calculator is None:
         raise ValueError("a calculator (CalculatorInterface) is required")
@@ -119,9 +129,10 @@ def finalize_structure(
         amorphous_struct.atoms,
         fmax=fmax,
         max_steps=max_steps,
-        traj_name="final_opt",
+        traj_name="final_opt" if write_trajectories else None,
         traj_fmt="xyz",
-        interval=traj_interval
+        interval=traj_interval,
+        workdir=workdir,
     )
     # Drop any leftover MD velocities (set by a growth-time anneal) so the finalized
     # structure is static and is written without a spurious velocity block.
