@@ -84,3 +84,26 @@ def test_select_idx_for_move_skips_isolated_atoms(make_struct):
                      cell=(14.0, 14.0, 14.0))
     pair = select_idx_for_move(s2, [0, 1, 2])
     assert pair is not None and set(pair) <= {0, 1}
+
+
+# --- charge correction must not leave (or crash on) atoms its own move orphaned --------
+# move_atom shoves an atom a full bond-length off a neighbour to break a bond; if that
+# neighbour had no other bond it is orphaned. When the re-cap placement fails, the dangling
+# atom must be pruned rather than left in the structure / fed to the next move selection.
+
+def test_correct_charge_prunes_move_orphans(make_struct):
+    import numpy as np
+    from saturation.new_sat import move_atom, _prune_orphans_from_move
+
+    s = make_struct(["Si", "O", "O", "O"],
+                    [[7, 7, 7], [8.6, 7, 7], [7, 8.6, 7], [7, 7, 8.6]], cell=(16.0, 16.0, 16.0))
+    cn_before = s.get_cn()
+    n_before = len(s)
+    assert int(cn_before[1]) == 1                    # O#1 bonded only to the central Si
+
+    move_atom(s, idx_move=0, move_away_from=1, dist_move=3.5, alpha=0.5)   # orphans O#1
+    removed = _prune_orphans_from_move(s, cn_before, n_before)
+
+    assert removed == 1                              # the orphaned O is dropped
+    s.get_graph(force_rebuild=True)
+    assert int(np.sum(np.asarray(s.get_cn()) == 0)) == 0   # nothing left isolated
