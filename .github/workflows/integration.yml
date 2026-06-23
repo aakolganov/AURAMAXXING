@@ -47,4 +47,9 @@ jobs:
           pip install "torch~=2.7.0" "mace-torch~=0.3.13"
           pip install "numpy<2"
       - name: Run heavy (MACE) integration tests
-        run: pytest -m heavy
+        timeout-minutes: 30
+        # Tolerate pytest's "no tests collected" (exit 5) so the tier is green when no
+        # heavy test is selected; any real failure still fails the job.
+        run: |
+          pytest -m heavy || { code=$?; [ "$code" -eq 5 ] || exit "$code"; \
+            echo "::notice::no heavy tests collected (pytest exit 5) — treating as pass"; }
