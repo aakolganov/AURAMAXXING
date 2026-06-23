@@ -125,6 +125,8 @@ finalize:                   # optional
 saturation:        {enabled: false, num_samples: 250}
 charge_correction: {enabled: false, max_iterations: 1000, num_samples: 250, move_alpha: 0.5}
 
+statistics:        {enabled: true, per_structure: true, pooled: true}   # analysis plots + stats.json
+
 rules:                      # optional list, applied after saturation
   - {type: avoid_motif, edge_element: Al, center_element: O, swap_candidate: Si}
   - {type: min_distance, min_dist: 1.4}
@@ -141,6 +143,32 @@ to a per-run subdirectory (`output_dir/seed{seed}_alpha{alpha}/structure.<ext>`)
 combination is written straight to `output_dir/structure.<ext>`. Unknown or missing keys
 raise a clear error naming the offending path — use `--dry-run` to validate quickly without
 LAMMPS/MACE. See `examples/config/sio2.yaml` and `examples/config/siral70.yaml`.
+
+## Statistics & plots
+
+With `statistics.enabled` (on by default) the runner writes a set of diagnostic plots +
+a `stats.json` next to each structure, and a pooled set across the sweep in `output_dir`:
+
+- **coordination.png** — coordination-number distribution per element (fixed substrate
+  atoms excluded).
+- **homo_element_distance.png** — nearest same-element distance per element, with the
+  bonding cutoff marked and any homo-element "bonds" below it flagged (O–O, Si–Si … defects).
+- **element_O_distance.png** — nearest element–O distance per element.
+- **tau4.png** — τ₄ and τ₄′ geometry indices for 4-coordinate centres (1 = tetrahedral,
+  0 = square planar).
+- **oh_distance.png**, **oh_per_element.png** — saturation runs only: O–H distances and the
+  number of –OH groups per cation.
+
+For large ensembles, set `statistics.per_structure: false` to skip the per-structure plots
+(which multiply with every structure) while still getting the single pooled set; or
+`statistics.enabled: false` to turn analysis off entirely.
+
+The same analysis runs standalone on any saved structure:
+
+```bash
+python -m stats output/**/structure.vasp --out stats_dir   # add --saturation for the OH plots
+```
+(or `from stats import write_report` / `analyze_structure` in Python).
 
 ## Python API
 

@@ -3,7 +3,7 @@ from setuptools import setup
 setup(
     name='AURAMAXXING',
     version='',
-    packages=['base', 'growth', 'helpers', 'interfaces', 'saturation', 'rules', 'runner'],
+    packages=['base', 'growth', 'helpers', 'interfaces', 'saturation', 'rules', 'runner', 'stats'],
     python_requires='>=3.10',
     install_requires=['numpy', 'scipy', 'networkx', 'ase', 'tqdm', 'pyyaml'],
     entry_points={'console_scripts': ['auramaxxing = runner.__main__:main']},

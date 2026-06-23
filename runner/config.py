@@ -223,6 +223,21 @@ class ChargeCorrectionSpec:
 
 
 @dataclass
+class StatisticsSpec:
+    enabled: bool = True               # master switch for any statistics output
+    per_structure: bool = True         # write per-structure plots + stats.json in each dir
+    pooled: bool = True                # write one pooled plot set across the sweep
+
+    @classmethod
+    def from_dict(cls, d: dict, where: str) -> "StatisticsSpec":
+        d = _as_dict(d, where)
+        _check_keys(d, {"enabled", "per_structure", "pooled"}, where)
+        return cls(enabled=bool(d.get("enabled", True)),
+                   per_structure=bool(d.get("per_structure", True)),
+                   pooled=bool(d.get("pooled", True)))
+
+
+@dataclass
 class RuleSpec:
     type: str
     options: dict = field(default_factory=dict)
@@ -306,6 +321,7 @@ class RunConfig:
     finalize: FinalizeSpec = field(default_factory=FinalizeSpec)
     saturation: SaturationSpec = field(default_factory=SaturationSpec)
     charge_correction: ChargeCorrectionSpec = field(default_factory=ChargeCorrectionSpec)
+    statistics: StatisticsSpec = field(default_factory=StatisticsSpec)
     rules: list = field(default_factory=list)
     run: RunSpec = field(default_factory=RunSpec)
 
@@ -315,7 +331,8 @@ class RunConfig:
         _check_keys(
             d,
             {"structure", "composition", "limits", "calculators", "coordination",
-             "growth", "finalize", "saturation", "charge_correction", "rules", "run"},
+             "growth", "finalize", "saturation", "charge_correction", "statistics",
+             "rules", "run"},
             "config",
             required=("structure", "composition", "limits", "calculators"),
         )
@@ -332,6 +349,7 @@ class RunConfig:
             finalize=FinalizeSpec.from_dict(d.get("finalize", {}), "finalize"),
             saturation=SaturationSpec.from_dict(d.get("saturation", {}), "saturation"),
             charge_correction=ChargeCorrectionSpec.from_dict(d.get("charge_correction", {}), "charge_correction"),
+            statistics=StatisticsSpec.from_dict(d.get("statistics", {}), "statistics"),
             rules=[RuleSpec.from_dict(r, f"rules[{i}]") for i, r in enumerate(rules)],
             run=RunSpec.from_dict(d.get("run", {}), "run"),
         )
