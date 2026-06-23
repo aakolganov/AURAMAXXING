@@ -7,6 +7,19 @@ skip where it is absent).
 import pytest
 
 
+def test_is_local_path_distinguishes_files_from_foundation_specs():
+    from interfaces.MACE_interface import MACEInterface
+    p = MACEInterface._is_local_path
+    # local files (existence is enforced in __init__) -> True
+    assert p("2024-01-07-mace-128-L2_epoch-199.model")
+    assert p("/abs/dir/model.pt")
+    assert p("sub/dir/m")
+    # foundation-model keywords / URLs that mace_mp downloads itself -> False
+    assert not p("small")
+    assert not p("medium")
+    assert not p("https://example.org/mace-mp-0a-small.model")
+
+
 def test_resolve_dtype_defaults_by_device():
     from interfaces.MACE_interface import MACEInterface
     # float64 on CPU/CUDA (accurate, recommended for opt), float32 on MPS (no float64).

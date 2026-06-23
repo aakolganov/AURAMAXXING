@@ -16,7 +16,11 @@ class MACEInterface(CalculatorInterface):
         Parameters
         ----------
         mace_model_path : str
-            path to mace model file.
+            Path to a local MACE model file, OR a foundation-model spec that
+            ``mace_mp`` resolves and downloads itself: a size keyword
+            ("small"/"medium"/"large", e.g. the MIT-licensed MACE-MP-0a "small")
+            or a URL. Only a string that looks like a local file is required to
+            exist on disk.
         device : str, optional
             which device to use, by default "mps" - apple silicon GPU.
         """
@@ -25,7 +29,7 @@ class MACEInterface(CalculatorInterface):
         except ModuleNotFoundError:
             print("Please install mace-torch")
 
-        if not os.path.exists(mace_model_path):
+        if self._is_local_path(mace_model_path) and not os.path.exists(mace_model_path):
             raise FileNotFoundError(f"MACE model wasn't found: {mace_model_path}")
 
         mace_kwargs = dict(
@@ -40,6 +44,14 @@ class MACEInterface(CalculatorInterface):
         self.dump_path = Path(dump_path)
         if not self.dump_path.exists():
             os.makedirs(dump_path, exist_ok=True)
+
+    @staticmethod
+    def _is_local_path(model: str) -> bool:
+        """True if `model` denotes a local file (which must exist) rather than a
+        foundation-model keyword/URL that mace_mp resolves and downloads itself."""
+        if model.startswith(("http://", "https://")):
+            return False
+        return (os.sep in model) or model.endswith((".model", ".pt"))
 
     @staticmethod
     def _resolve_dtype(device: str, explicit_dtype):
