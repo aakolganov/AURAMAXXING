@@ -244,6 +244,9 @@ class AmorphousStruc:
 
     def sort_atoms(self) -> None:
         self.atoms = self.atoms[self.atoms.numbers.argsort()]
+        # Reordering changes every node's index, so the cached graph (keyed by the old
+        # indices) no longer matches the atoms; force a rebuild on the next query.
+        self.invalidate_graph()
 
 
     def _rebuild_graph(self) -> None:
