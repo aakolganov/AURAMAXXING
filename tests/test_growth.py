@@ -118,6 +118,39 @@ def test_growth_produces_valid_structure(dummy_calc, tmp_path):
     assert np.all(pos >= 0.0) and np.all(pos < np.array(cell))
 
 
+# --- H1: finalize must invalidate the cached coordination graph -------------------
+# finalize_structure relaxes atoms.positions in place via the calculator's optimizer.
+# The cached graph cannot observe an in-place position change, so without an explicit
+# invalidation get_cn()/get_graph() keep returning the pre-relaxation coordination --
+# which the saturation/charge stages (which run right after finalize) then read.
+
+class _BondFormingCalc:
+    """Minimal CalculatorInterface stand-in whose optimize() deterministically pulls atom 1
+    to a bonding distance from atom 0 (mimicking a relaxation that forms a bond). Used so the
+    test pins the cache-invalidation contract without depending on the soft LJ dummy's force
+    magnitudes (which leave near-bond atoms unmoved at the default fmax)."""
+    def optimize(self, atoms, **kwargs):
+        atoms.positions[1] = atoms.positions[0] + [1.6, 0.0, 0.0]   # 1.6 A < 2.0 A Si-O cutoff
+        return atoms
+
+
+def test_finalize_invalidates_stale_graph(make_struct):
+    from growth.new_growth import finalize_structure
+
+    # Si-O at 2.3 A -- just beyond the 2.0 A Si-O bonding cutoff, so initially unbonded.
+    s = make_struct(["Si", "O"], [[10, 10, 10], [12.3, 10, 10]], cell=(20.0, 20.0, 20.0))
+    assert s.get_cn().tolist() == [0, 0]              # primes the graph cache (no bond)
+
+    finalize_structure(s, calculator=_BondFormingCalc())   # relaxation -> bonded at 1.6 A
+
+    # Read the cached path FIRST (a force_rebuild would itself refresh the cache and mask
+    # the bug). Stale graph -> [0, 0]; correctly invalidated -> [1, 1].
+    cached = s.get_cn().tolist()
+    truth = [s.get_graph(force_rebuild=True).degree(i) for i in range(len(s))]
+    assert truth == [1, 1]                            # the relaxed geometry really is bonded
+    assert cached == truth
+
+
 # --- Tier A #2: seeded growth is reproducible ------------------------------------
 
 def test_growth_is_deterministic(dummy_calc, tmp_path):

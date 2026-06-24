@@ -102,6 +102,10 @@ def grow_structure(
                     workdir=workdir,
                     **anneal_params,
                     )
+                # The anneal MD moved every atom in place; invalidate the cached graph so
+                # the slice below (when it removes nothing) and the next iteration's
+                # get_cn() anchor selection both see the post-anneal geometry.
+                amorphous_struct.invalidate_graph()
 
                 slice_structure(amorphous_struct)
                 pbar.n = len(amorphous_struct)
@@ -134,6 +138,10 @@ def finalize_structure(
         interval=traj_interval,
         workdir=workdir,
     )
+    # The optimizer relaxed atoms.positions in place, which the cached coordination graph
+    # cannot detect; mark it stale so the next get_cn()/get_graph() (e.g. the saturation
+    # stage that runs right after finalize) rebuilds from the relaxed geometry.
+    amorphous_struct.invalidate_graph()
     # Drop any leftover MD velocities (set by a growth-time anneal) so the finalized
     # structure is static and is written without a spurious velocity block.
     amorphous_struct.atoms.arrays.pop("momenta", None)

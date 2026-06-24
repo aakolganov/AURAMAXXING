@@ -54,6 +54,18 @@ class AmorphousStruc:
         return self._graph
 
 
+    def invalidate_graph(self) -> None:
+        """Mark the cached coordination graph stale so the next ``get_graph``/``get_cn``
+        rebuilds it from the current positions.
+
+        The cache is kept in sync automatically for the class's own mutators
+        (``commit_atom``/``replace_atom``/``remove_atom``). Call this after positions are
+        changed *outside* those methods -- e.g. an ASE optimizer or MD run relaxes
+        ``atoms.positions`` in place, which the cache cannot otherwise detect.
+        """
+        self._need_graph_update = True
+
+
     def get_cn(self, index: Optional[int] = None) -> Union[int, np.ndarray]:
         """
         Get coordination number (CN) of one or all atoms.
@@ -232,6 +244,9 @@ class AmorphousStruc:
 
     def sort_atoms(self) -> None:
         self.atoms = self.atoms[self.atoms.numbers.argsort()]
+        # Reordering changes every node's index, so the cached graph (keyed by the old
+        # indices) no longer matches the atoms; force a rebuild on the next query.
+        self.invalidate_graph()
 
 
     def _rebuild_graph(self) -> None:
