@@ -118,7 +118,9 @@ calculators:                # type: lammps | mace | uma; extra keys are backend 
   growth:     {type: lammps, dump_path: dump_lmp}
   saturation: {type: mace, mace_model_path: model.model, device: cuda, dump_path: dump_mace}
               # optional; defaults to the growth calculator. mace needs mace_model_path;
-              # uma needs uma_model_path.
+              # uma needs uma_model_path (a pretrained name like "uma-s-1p2" that fairchem
+              # downloads, or a local checkpoint path) and takes an optional task (default
+              # omat; one of omol/omat/odac/oc20/oc25/omc).
 
 growth:                     # all optional (defaults shown)
   max_placement_attempts: 1000
