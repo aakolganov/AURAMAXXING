@@ -191,8 +191,10 @@ python -m runner config.yaml --remote --device cuda --workers 8 --threads 1
 ```
 
 The GPU is fed by all workers (so it stays busy), the workers never touch CUDA, and any
-non-MACE stage (e.g. LAMMPS/BKS growth) still runs locally on the worker's CPU. Sharding,
-manifests and `--pool-only` work the same way. (`--remote` needs `e3nn<0.5` for MACE
+non-MACE stage (e.g. LAMMPS/BKS growth) still runs locally on the worker's CPU. The evaluator
+coalesces up to `--batch-size` concurrently-queued requests (default = `--workers`) into one
+batched forward pass; `--batch-size 1` disables it. Sharding, manifests and `--pool-only` work
+the same way, and `--resume` skips already-written slabs. (`--remote` needs `e3nn<0.5` for MACE
 checkpoints to load — see `requirements.txt`.)
 
 Ready-to-edit job-array templates for all three scenarios are in `examples/slurm/` (see its

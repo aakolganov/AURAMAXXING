@@ -159,6 +159,27 @@ def test_pool_from_config_rebuilds_from_disk(tmp_path, monkeypatch):
     assert json.loads(pooled.read_text())["summary"]["n_structures"] == 2
 
 
+def test_resume_skips_existing_outputs(tmp_path, monkeypatch):
+    import json
+    from tests.dummy_interface import DummyInterface
+    monkeypatch.setattr("runner.runner.build_calculator",
+                        lambda spec: DummyInterface(dump_path=str(tmp_path / "dump")))
+    cfg = _blank_cfg(tmp_path, seeds=[0, 1])
+    cfg.statistics.enabled = False
+    run_from_config(cfg)
+    out = tmp_path / "out"
+    paths = sorted(out.glob("seed*/structure.vasp"))
+    assert len(paths) == 2
+    survivor_mtime = paths[1].stat().st_mtime_ns
+
+    paths[0].unlink()                       # simulate one slab missing (failed/interrupted)
+    run_from_config(cfg, resume=True)       # only the missing one should regenerate
+    man = json.loads((out / "manifest.json").read_text())
+    assert man["skipped"] == 1 and man["succeeded"] == 1
+    assert paths[0].exists()                                  # regenerated
+    assert paths[1].stat().st_mtime_ns == survivor_mtime      # untouched
+
+
 def test_manifest_records_every_combo(tmp_path, monkeypatch):
     import json
     from tests.dummy_interface import DummyInterface
