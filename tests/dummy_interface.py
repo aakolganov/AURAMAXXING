@@ -31,3 +31,9 @@ def dummy_calc_provider(cfg):
     spawn the workers import this by reference, so the pool can be tested without LAMMPS."""
     calc = DummyInterface(dump_path=str(Path(cfg.run.output_dir) / "_dump"))
     return calc, calc
+
+
+def lj_remote_factory(device):
+    """A module-level (picklable) calc_factory for the remote evaluator: returns an LJ ASE
+    calculator regardless of device, so the GPU path can be exercised on CPU without torch."""
+    return LennardJones(sigma=1.5, epsilon=0.01, rc=6.0)

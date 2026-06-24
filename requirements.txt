@@ -7,4 +7,5 @@ tqdm~=4.67.1
 pyyaml
 torch~=2.7.0
 mace-torch~= 0.3.13
+e3nn<0.5               # mace-torch 0.3.x checkpoints won't unpickle under e3nn>=0.5
 lammps~=2024.8.29.3.0

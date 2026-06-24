@@ -176,12 +176,28 @@ python -m runner config.yaml --num-shards 4 --shard 0 --workers 8 --threads 1
 ```
 
 Keep `workers * threads <= cores_per_node`. For CPU MACE, prefer one slab per node
-(`--workers 1 --threads <cores>`) so each evaluation uses the whole node; parallelism then
-comes from the array. A ready-to-edit job-array template is in
-`examples/slurm/generate_array.sbatch`.
+(`--workers 1 --threads <cores>`) so each evaluation uses the whole node and the model is
+loaded once per node; parallelism then comes from the array.
 
 After a sharded run, build the single pooled report (and merge the per-shard manifests)
 once with `python -m runner config.yaml --pool-only`.
+
+**MACE on GPU + CPU workers (`--remote`).** With a GPU, `--remote` evaluates the MACE
+calculator in one process that owns the model on the device, while `--workers` CPU processes
+run the placement/optimization control flow and proxy their force/energy calls to it:
+
+```bash
+python -m runner config.yaml --remote --device cuda --workers 8 --threads 1
+```
+
+The GPU is fed by all workers (so it stays busy), the workers never touch CUDA, and any
+non-MACE stage (e.g. LAMMPS/BKS growth) still runs locally on the worker's CPU. Sharding,
+manifests and `--pool-only` work the same way. (`--remote` needs `e3nn<0.5` for MACE
+checkpoints to load — see `requirements.txt`.)
+
+Ready-to-edit job-array templates for all three scenarios are in `examples/slurm/` (see its
+README); the configs they use are `examples/config/scenario1_lammps_cpu.yaml`,
+`examples/config/siral70_mace_cpu.yaml`, and `examples/config/scenario3_mace_gpu.yaml`.
 
 ## Statistics & plots
 

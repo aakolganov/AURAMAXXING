@@ -1,0 +1,43 @@
+# Scenario 3 -- MACE on GPU + CPU workers.
+#
+# LAMMPS/BKS grows each slab on the worker's CPU; the saturation/finalize MACE potential is
+# evaluated by one GPU process that all workers share (run with --remote --device cuda). The
+# remote run routes only the MACE stage to the GPU -- the LAMMPS growth stays local on CPU.
+#
+#   python -m runner examples/config/scenario3_mace_gpu.yaml --remote --device cuda \
+#       --num-shards N --shard $SLURM_ARRAY_TASK_ID --workers $CORES --threads 1
+#   python -m runner examples/config/scenario3_mace_gpu.yaml --pool-only   # after the array
+#
+# NOTE: needs e3nn<0.5 for MACE checkpoints to load (see requirements.txt).
+# See examples/slurm/scenario3_mace_gpu.sbatch.
+
+structure:
+  cell: [22.0, 22.0, 40.0]
+
+composition:
+  target_ratios: {Si: 4, Al: 2, O: 11}
+  target_number_atoms: 440
+
+limits:
+  bottom: {type: flat,    z: 12.0}
+  top:    {type: fourier, z_av: 24.0, alpha: 1.0}
+  fix: bottom
+
+coordination:
+  overcoord_policy:
+    Al: {max_cn: 6, fraction: 0.2}
+
+calculators:
+  growth:     {type: lammps, dump_path: dump_lmp}     # CPU, local to each worker
+  # "medium" downloads the MACE-MP foundation model; swap for a local .model path if preferred.
+  # device here is ignored under --remote (the evaluator uses --device).
+  saturation: {type: mace, mace_model_path: medium, dump_path: dump_mace}
+
+saturation:        {enabled: true}
+charge_correction: {enabled: true}
+
+run:
+  seeds: [0, 1, 2, 3]
+  roughness: [0.01, 0.1, 1.0]      # 4 seeds x 3 = 12 structures across the array
+  output_dir: output/scenario3_mace_gpu
+  output_format: vasp
