@@ -238,6 +238,22 @@ class StatisticsSpec:
 
 
 @dataclass
+class DebugSpec:
+    """Debug-only outputs. Off by default: the per-atom growth snapshots and the
+    MD/optimization trajectories are large and I/O-heavy on big ensembles, and are
+    mostly useful for diagnosing a single run."""
+    write_growth_dumps: bool = False   # per-atom xyz snapshot after every placement
+    write_trajectories: bool = False   # anneal + finalize trajectory files
+
+    @classmethod
+    def from_dict(cls, d: dict, where: str) -> "DebugSpec":
+        d = _as_dict(d, where)
+        _check_keys(d, {"write_growth_dumps", "write_trajectories"}, where)
+        return cls(write_growth_dumps=bool(d.get("write_growth_dumps", False)),
+                   write_trajectories=bool(d.get("write_trajectories", False)))
+
+
+@dataclass
 class RuleSpec:
     type: str
     options: dict = field(default_factory=dict)
@@ -322,6 +338,7 @@ class RunConfig:
     saturation: SaturationSpec = field(default_factory=SaturationSpec)
     charge_correction: ChargeCorrectionSpec = field(default_factory=ChargeCorrectionSpec)
     statistics: StatisticsSpec = field(default_factory=StatisticsSpec)
+    debug: DebugSpec = field(default_factory=DebugSpec)
     rules: list = field(default_factory=list)
     run: RunSpec = field(default_factory=RunSpec)
 
@@ -332,7 +349,7 @@ class RunConfig:
             d,
             {"structure", "composition", "limits", "calculators", "coordination",
              "growth", "finalize", "saturation", "charge_correction", "statistics",
-             "rules", "run"},
+             "debug", "rules", "run"},
             "config",
             required=("structure", "composition", "limits", "calculators"),
         )
@@ -350,6 +367,7 @@ class RunConfig:
             saturation=SaturationSpec.from_dict(d.get("saturation", {}), "saturation"),
             charge_correction=ChargeCorrectionSpec.from_dict(d.get("charge_correction", {}), "charge_correction"),
             statistics=StatisticsSpec.from_dict(d.get("statistics", {}), "statistics"),
+            debug=DebugSpec.from_dict(d.get("debug", {}), "debug"),
             rules=[RuleSpec.from_dict(r, f"rules[{i}]") for i, r in enumerate(rules)],
             run=RunSpec.from_dict(d.get("run", {}), "run"),
         )

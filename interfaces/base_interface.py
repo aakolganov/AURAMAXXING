@@ -44,18 +44,21 @@ class CalculatorInterface(ABC):
     dump_path: Path
     calc: Calculator
 
-    def _attach_trajectory(self, run, atoms: Atoms, 
+    def _attach_trajectory(self, run, atoms: Atoms,
                            filename: str, fmt: str = "xyz",
-                           interval: int = 1):
+                           interval: int = 1, workdir: "Path | None" = None):
         """
         Attaches a modular trajectory writer to an optimizer or MD engine.
         Handles both native ASE .traj files and appended text formats (like .xyz).
+
+        ``workdir`` overrides ``self.dump_path`` so a single slab writes its trajectory
+        into its own directory; this keeps concurrent runs from sharing one file.
         """
-        if not Path(self.dump_path).exists():
-            os.makedirs(self.dump_path)
+        out_dir = Path(workdir) if workdir is not None else self.dump_path
+        out_dir.mkdir(parents=True, exist_ok=True)
 
         full_filename = f"{filename}.{fmt}"
-        filepath = self.dump_path / full_filename
+        filepath = out_dir / full_filename
         if Path(filepath).exists():
             os.remove(filepath)
         
@@ -65,18 +68,24 @@ class CalculatorInterface(ABC):
 
 
     def optimize(self, atoms: Atoms, fmax: float = 2.0, max_steps: int = 50,
-                 logfile: str = "log.log", traj_name: str | None = None, traj_fmt: str | None = None, 
+                 logfile: str = "log.log", traj_name: str | None = None, traj_fmt: str | None = None,
+                 workdir: "Path | None" = None,
                  **kwargs: Any) -> Atoms:
         """
         Optimize the geometry of the structure using BFGS.
+
+        ``workdir`` overrides ``self.dump_path`` for the log/trajectory of this call so
+        concurrent slabs never write to the same files.
         """
         print("Starting Optimization")
         traj_interval = kwargs.pop('interval', 1)
+        out_dir = Path(workdir) if workdir is not None else self.dump_path
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-        atoms.calc = self.calc 
-        opt = LBFGS(atoms, logfile=self.dump_path/logfile, **kwargs)
+        atoms.calc = self.calc
+        opt = LBFGS(atoms, logfile=out_dir/logfile, **kwargs)
         if traj_name:
-            self._attach_trajectory(opt, atoms, traj_name, traj_fmt, interval=traj_interval)
+            self._attach_trajectory(opt, atoms, traj_name, traj_fmt, interval=traj_interval, workdir=out_dir)
 
         opt.run(fmax=fmax, steps=max_steps)
         
@@ -85,18 +94,24 @@ class CalculatorInterface(ABC):
         return atoms
 
 
-    def anneal(self, atoms: Atoms, T_ini: float, T_fin: float, 
-               steps: int = 500, dt: float = 1.0 * units.fs, friction: float = 0.002, 
+    def anneal(self, atoms: Atoms, T_ini: float, T_fin: float,
+               steps: int = 500, dt: float = 1.0 * units.fs, friction: float = 0.002,
                logfile: str = "log.log", traj_name: str | None = None, traj_fmt: str | None = None,
+               workdir: "Path | None" = None,
                **kwargs: Any) -> Atoms:
         """
         Anneal the structure using a custom slowly decreasing Langevin thermostat.
+
+        ``workdir`` overrides ``self.dump_path`` for the log/trajectory of this call so
+        concurrent slabs never write to the same files.
         """
         print("Starting Anneal")
         traj_interval = kwargs.pop('interval', 1)
+        out_dir = Path(workdir) if workdir is not None else self.dump_path
+        out_dir.mkdir(parents=True, exist_ok=True)
 
         # Ensure the atoms object uses the interface's calculator
-        atoms.calc = self.calc 
+        atoms.calc = self.calc
 
         # Initialize our custom Annealing MD class
         dyn = AnnealingLangevin(
@@ -106,11 +121,11 @@ class CalculatorInterface(ABC):
             T_fin=T_fin,
             total_steps=steps,
             friction=friction,
-            logfile=self.dump_path/logfile,
+            logfile=out_dir/logfile,
             **kwargs
         )
         if traj_name:
-            self._attach_trajectory(dyn, atoms, traj_name, traj_fmt, interval=traj_interval)
+            self._attach_trajectory(dyn, atoms, traj_name, traj_fmt, interval=traj_interval, workdir=out_dir)
 
         # Run the annealing process
         dyn.run(steps)

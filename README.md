@@ -52,8 +52,16 @@ The primary interface is a **YAML config file** run through the `runner`:
 ```bash
 python -m runner examples/config/sio2.yaml            # generate
 python -m runner --dry-run examples/config/sio2.yaml  # validate + print the plan only
+python -m runner --threads 1 examples/config/sio2.yaml # cap compute threads per process
 auramaxxing examples/config/sio2.yaml                 # same, if installed with `pip install -e .`
 ```
+
+`--threads N` caps the compute threads this process uses (OMP/BLAS env + torch), to avoid
+oversubscription when running many slabs at once. The rule is `workers * threads <=
+cores_per_node`: use `--threads 1` for an in-node pool of many single-threaded workers, or
+`--threads <cores>` to give one slab the whole node (e.g. one MACE job per node). For
+backends whose threading initialises at interpreter start, also export `OMP_NUM_THREADS` in
+your launch/sbatch script.
 
 A minimal config — grow an amorphous SiO₂ slab with BKS/LAMMPS and write a POSCAR:
 
@@ -127,6 +135,11 @@ charge_correction: {enabled: false, max_iterations: 1000, num_samples: 250, move
 
 statistics:        {enabled: true, per_structure: true, pooled: true}   # analysis plots + stats.json
 
+debug:             {write_growth_dumps: false, write_trajectories: false} # optional; off by default
+# write_growth_dumps: per-atom xyz snapshot after every placement (many files, heavy I/O)
+# write_trajectories: anneal + finalize trajectory files. Both are debug-only; keep off
+# for large/parallel ensembles. Trajectories/logs are written into each structure's own dir.
+
 rules:                      # optional list, applied after saturation
   - {type: avoid_motif, edge_element: Al, center_element: O, swap_candidate: Si}
   - {type: min_distance, min_dist: 1.4}
@@ -162,6 +175,15 @@ a `stats.json` next to each structure, and a pooled set across the sweep in `out
 For large ensembles, set `statistics.per_structure: false` to skip the per-structure plots
 (which multiply with every structure) while still getting the single pooled set; or
 `statistics.enabled: false` to turn analysis off entirely.
+
+The pooled report is built by gathering the per-structure `metrics.json` files off disk, so
+it is correct no matter how the structures were produced. After a parallel/sharded run (where
+each task generates a subset of the slabs into a shared `output_dir`), build the single pooled
+report once with:
+
+```bash
+python -m runner config.yaml --pool-only   # gather metrics.json under output_dir -> pooled report
+```
 
 The same analysis runs standalone on any saved structure:
 

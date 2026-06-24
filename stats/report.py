@@ -18,6 +18,9 @@ _FIGURES = [
 ]
 
 
+_METRICS_FILE = "metrics.json"
+
+
 def _write_figures(metrics: dict, out_dir: Path, is_saturation: bool):
     for fname, fn, sat_only in _FIGURES:
         if sat_only and not is_saturation:
@@ -25,17 +28,53 @@ def _write_figures(metrics: dict, out_dir: Path, is_saturation: bool):
         fn(metrics, out_dir / fname)
 
 
-def write_report(struct, out_dir, is_saturation: bool = False, label: str | None = None) -> dict:
+def write_report(struct, out_dir, is_saturation: bool = False, label: str | None = None,
+                 metrics: dict | None = None) -> dict:
     """Analyse one structure: write its figures + stats.json into out_dir. Returns the
-    metrics dict so a caller can pool several structures."""
+    metrics dict so a caller can pool several structures. Pass a precomputed ``metrics``
+    to reuse an earlier ``analyze_structure`` instead of recomputing it."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    metrics = analyze_structure(struct, is_saturation=is_saturation)
+    if metrics is None:
+        metrics = analyze_structure(struct, is_saturation=is_saturation)
     _write_figures(metrics, out_dir, is_saturation)
     with open(out_dir / "stats.json", "w") as fh:
         json.dump({"label": label, "is_saturation": is_saturation,
                    "summary": summarize(metrics), "metrics": metrics}, fh, indent=2)
     return metrics
+
+
+def write_metrics(out_dir, metrics: dict, is_saturation: bool = False,
+                  label: str | None = None) -> Path:
+    """Persist one structure's machine-readable metrics (``metrics.json``) without any
+    plots. This small, always-writable artifact is what lets a pooled report be built
+    from structures produced by separate processes or SLURM array tasks (see
+    ``pool_reports_from_dir``)."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / _METRICS_FILE
+    with open(path, "w") as fh:
+        json.dump({"label": label, "is_saturation": is_saturation, "metrics": metrics}, fh, indent=2)
+    return path
+
+
+def pool_reports_from_dir(root, is_saturation: bool = False) -> dict | None:
+    """Reduce step for an ensemble: gather every per-structure ``metrics.json`` under
+    ``root`` and write the pooled figure set + ``stats_pooled.json`` into ``root``.
+
+    Reading results off disk (rather than from an in-memory list) is what makes pooling
+    correct under parallelism: structures generated serially, by an in-node pool, or by
+    independent SLURM array tasks all land as ``metrics.json`` files in the same output
+    tree, and this gathers them uniformly. Returns the merged metrics, or ``None`` when
+    fewer than two were found (nothing to pool)."""
+    root = Path(root)
+    metrics_list = []
+    for path in sorted(root.glob(f"**/{_METRICS_FILE}")):
+        with open(path) as fh:
+            metrics_list.append(json.load(fh)["metrics"])
+    if len(metrics_list) < 2:
+        return None
+    return write_pooled_report(metrics_list, root, is_saturation=is_saturation)
 
 
 def write_pooled_report(metrics_list: list, out_dir, is_saturation: bool = False) -> dict:

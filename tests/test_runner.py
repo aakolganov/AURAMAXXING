@@ -4,7 +4,7 @@ import pytest
 from ase.io import read
 
 from runner.config import load_config, CalculatorSpec
-from runner.runner import resolve_plan, build_calculator, run_from_config
+from runner.runner import resolve_plan, build_calculator, run_from_config, pool_from_config, _combo_seed
 
 
 def _blank_cfg(tmp_path, **run):
@@ -99,6 +99,76 @@ def test_statistics_per_structure_off_keeps_pooled(tmp_path, monkeypatch):
         assert not (path.parent / "stats.json").exists()
     assert (tmp_path / "out" / "stats_pooled.json").exists()    # pooled still produced
     assert (tmp_path / "out" / "coordination.png").exists()
+
+
+# --- Phase 0: per-combo seeding, debug dumps, manifest -----------------------------
+
+def test_combo_seed_decorrelates_and_reproduces():
+    # Same (seed, alpha) -> identical stream; differing in either -> different stream.
+    draw = lambda rng: rng.integers(0, 2**31, size=8).tolist()
+    assert draw(_combo_seed(0, 1.0)) == draw(_combo_seed(0, 1.0))      # reproducible
+    assert draw(_combo_seed(0, 0.01)) != draw(_combo_seed(0, 1.0))     # alpha decorrelates
+    assert draw(_combo_seed(0, None)) != draw(_combo_seed(1, None))    # seed decorrelates
+
+
+def test_debug_dumps_off_by_default_then_isolated_per_slab(tmp_path, monkeypatch):
+    from tests.dummy_interface import DummyInterface
+    # All calculators share ONE dump_path: the worst case for file collisions.
+    shared = tmp_path / "shared_dump"
+    monkeypatch.setattr("runner.runner.build_calculator",
+                        lambda spec: DummyInterface(dump_path=str(shared)))
+
+    cfg = _blank_cfg(tmp_path, seeds=[0, 1])
+    cfg.statistics.enabled = False
+    run_from_config(cfg)                          # debug defaults: everything off
+    out = tmp_path / "out"
+    assert not list(out.rglob("final_opt.xyz"))   # no trajectories
+    assert not list(out.rglob("traj.xyz"))
+    assert not list(out.rglob("growth/dump_*"))   # no per-atom growth snapshots
+
+    cfg2 = _blank_cfg(tmp_path, seeds=[0, 1], output_dir=str(tmp_path / "out2"))
+    cfg2.statistics.enabled = False
+    cfg2.debug.write_trajectories = True
+    run_from_config(cfg2)
+    out2 = tmp_path / "out2"
+    trajs = list(out2.rglob("final_opt.xyz"))
+    assert len(trajs) == 2                                   # one per slab
+    assert all("seed" in t.parent.name for t in trajs)       # in each slab's own dir
+    assert not (shared / "final_opt.xyz").exists()           # not the shared dump
+
+
+def test_pool_from_config_rebuilds_from_disk(tmp_path, monkeypatch):
+    # Parallel pattern: generation leaves a metrics.json per slab on disk; a single
+    # reduce step (pool_from_config) builds the pooled report from those files. This is
+    # exactly how a sharded SLURM run pools after all array tasks finish.
+    import json
+    from tests.dummy_interface import DummyInterface
+    monkeypatch.setattr("runner.runner.build_calculator",
+                        lambda spec: DummyInterface(dump_path=str(tmp_path / "dump")))
+    cfg = _blank_cfg(tmp_path, seeds=[0, 1])
+    run_from_config(cfg)
+
+    pooled = tmp_path / "out" / "stats_pooled.json"
+    assert pooled.exists()
+    pooled.unlink()                       # simulate "slabs generated, pooled not yet built"
+    pool_from_config(cfg)                 # reduce: gather metrics.json off disk
+    assert pooled.exists()
+    assert json.loads(pooled.read_text())["summary"]["n_structures"] == 2
+
+
+def test_manifest_records_every_combo(tmp_path, monkeypatch):
+    import json
+    from tests.dummy_interface import DummyInterface
+    monkeypatch.setattr("runner.runner.build_calculator",
+                        lambda spec: DummyInterface(dump_path=str(tmp_path / "dump")))
+    cfg = _blank_cfg(tmp_path, seeds=[0, 1])
+    cfg.statistics.enabled = False
+    run_from_config(cfg)
+
+    manifest = json.loads((tmp_path / "out" / "manifest.json").read_text())
+    assert manifest["total"] == 2 and manifest["succeeded"] == 2 and manifest["failed"] == 0
+    assert {c["seed"] for c in manifest["combos"]} == {0, 1}
+    assert all(c["status"] == "ok" for c in manifest["combos"])
 
 
 # --- CLI ---------------------------------------------------------------------------
