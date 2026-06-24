@@ -22,11 +22,17 @@ sample_dist: Dict[str, RandomSample[str, Callable]] = {
         # plain positive window matching d_min_max instead of the original fitted
         # burr12 whose loc=-0.226 admitted negative distances.
         "O": uniform(loc=2.05, scale=0.35),
-        "Al": uniform(loc=1.8, scale=0.4)
+        # [1.7, 2.1): upper bound == the (O,Al) bonding cutoff (default_max_cut_offs)
+        # so a sampled Al-O placement is always inside the cutoff and is counted as a
+        # graph edge. The previous [1.8, 2.2] over-shot the 2.1 cutoff ~25% of the time,
+        # committing "bonded" atoms the coordination graph then scored as non-bonded.
+        "Al": uniform(loc=1.7, scale=0.4)
     }),
     "Al": RandomSample({
         "Si": uniform(loc=2.2, scale=0.32),
-        "O": uniform(loc=1.8, scale=0.4),
+        # [1.7, 2.1): see the O->Al note above -- upper bound == the (O,Al) cutoff so the
+        # placement is always a graph edge (was [1.8, 2.2], over-shooting the 2.1 cutoff).
+        "O": uniform(loc=1.7, scale=0.4),
         "Al": burr12(c=20.50918422948114, d=3.282331385061921, loc=1.8153399428512698, scale=1.3978541397862818)
     })
 }
