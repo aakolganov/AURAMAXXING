@@ -9,6 +9,7 @@ calculators or running anything (used by `--dry-run`).
 from __future__ import annotations
 
 import json
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Optional, Union
 
@@ -204,59 +205,130 @@ def _generate_one(cfg: RunConfig, seed: int, roughness: Optional[float],
     return struct
 
 
-def run_from_config(source: Union[str, Path, dict, RunConfig]) -> list[Path]:
+def _shard_plan(plan: list, shard: Optional[int], num_shards: Optional[int]) -> list:
+    """Return this task's slice of the plan. ``plan[shard::num_shards]`` is a deterministic
+    round-robin partition: the union over shard in [0, num_shards) is the whole plan with no
+    overlap, so independent SLURM array tasks cover everything exactly once."""
+    if num_shards is None and shard is None:
+        return plan
+    if num_shards is None or shard is None:
+        raise ValueError("--shard and --num-shards must be given together")
+    if num_shards < 1:
+        raise ValueError(f"--num-shards must be >= 1, got {num_shards}")
+    if not (0 <= shard < num_shards):
+        raise ValueError(f"--shard must be in [0, {num_shards}), got {shard}")
+    return plan[shard::num_shards]
+
+
+def _run_entry(cfg: RunConfig, entry: dict, growth_calc, sat_calc) -> dict:
+    """Generate one slab and write its statistics. Returns a manifest record (never raises);
+    a failure is captured in the record so a parallel sweep keeps going."""
+    out_path = entry["output_path"]
+    record = {"seed": entry["seed"], "alpha": entry["alpha"],
+              "output_path": str(out_path), "status": "ok"}
+    try:
+        struct = _generate_one(cfg, entry["seed"], entry["alpha"], out_path, growth_calc, sat_calc)
+        print(f"[runner] wrote {out_path}")
+        if cfg.statistics.enabled:
+            # Per structure: plots+stats.json (gated by per_structure) and a small
+            # metrics.json (gated by pooled) that the disk-scan pooler gathers.
+            _write_stats(struct, out_path.parent, cfg.saturation.enabled,
+                         label=out_path.parent.name,
+                         write_files=cfg.statistics.per_structure,
+                         write_metrics_file=cfg.statistics.pooled)
+    except Exception as exc:   # keep the sweep going; report what was skipped
+        record["status"] = "failed"
+        record["error"] = f"{type(exc).__name__}: {exc}"
+        print(f"[runner] FAILED seed={entry['seed']} alpha={entry['alpha']}: "
+              f"{type(exc).__name__}: {exc}")
+    return record
+
+
+def _default_calc_provider(cfg: RunConfig):
+    """Build the (growth, saturation) calculators from the config. Calculators (LAMMPS/torch)
+    don't pickle, so this runs inside each worker rather than in the parent."""
+    growth = build_calculator(cfg.calculators.growth)
+    sat = build_calculator(cfg.calculators.saturation) if cfg.calculators.saturation else growth
+    return growth, sat
+
+
+# Per-worker state for the in-node process pool: the calculators are built once per worker
+# process (see _default_calc_provider) and stored here.
+_WORKER: dict = {}
+
+
+def _worker_init(cfg: RunConfig, threads: Optional[int], calc_provider) -> None:
+    from .threads import configure_threads
+    configure_threads(threads)
+    growth, sat = calc_provider(cfg)
+    _WORKER.update(cfg=cfg, growth=growth, sat=sat)
+
+
+def _worker_run(entry: dict) -> dict:
+    return _run_entry(_WORKER["cfg"], entry, _WORKER["growth"], _WORKER["sat"])
+
+
+def run_from_config(source: Union[str, Path, dict, RunConfig], *,
+                    workers: int = 1, threads: Optional[int] = None,
+                    shard: Optional[int] = None, num_shards: Optional[int] = None,
+                    calc_provider=None) -> list[Path]:
     """Run the full pipeline for every seed/roughness combination in the config.
 
-    Returns the list of written output paths. A combination that fails is logged and
-    skipped rather than aborting the whole sweep.
+    ``shard``/``num_shards`` restrict this run to a deterministic slice of the plan (one
+    SLURM array task per shard). ``workers`` runs that slice across an in-node process pool
+    (each worker builds its own calculators); ``threads`` caps compute threads per process.
+    ``calc_provider(cfg) -> (growth_calc, sat_calc)`` overrides how calculators are built; it
+    must be a module-level (picklable) callable when ``workers > 1``.
+
+    Returns the list of written output paths. A combination that fails is logged and skipped
+    rather than aborting the whole sweep. When sharded, the pooled report is left to a final
+    ``--pool-only`` reduce (no single task sees every structure).
     """
     cfg = source if isinstance(source, RunConfig) else load_config(source)
-    plan = resolve_plan(cfg)
+    plan = _shard_plan(resolve_plan(cfg), shard, num_shards)
+    provider = calc_provider or _default_calc_provider
 
-    growth_calc = build_calculator(cfg.calculators.growth)
-    sat_calc = build_calculator(cfg.calculators.saturation) if cfg.calculators.saturation else growth_calc
+    if workers and workers > 1:
+        with ProcessPoolExecutor(max_workers=workers, initializer=_worker_init,
+                                 initargs=(cfg, threads, provider)) as ex:
+            records = list(ex.map(_worker_run, plan))
+    else:
+        from .threads import configure_threads
+        configure_threads(threads)
+        growth_calc, sat_calc = provider(cfg)
+        records = [_run_entry(cfg, entry, growth_calc, sat_calc) for entry in plan]
 
-    written: list[Path] = []
-    manifest: list[dict] = []
-    for entry in plan:
-        out_path = entry["output_path"]
-        record = {"seed": entry["seed"], "alpha": entry["alpha"],
-                  "output_path": str(out_path), "status": "ok"}
-        try:
-            struct = _generate_one(cfg, entry["seed"], entry["alpha"], out_path, growth_calc, sat_calc)
-            written.append(out_path)
-            print(f"[runner] wrote {out_path}")
-            if cfg.statistics.enabled:
-                # Per structure: plots+stats.json (gated by per_structure) and a small
-                # metrics.json (gated by pooled) that the disk-scan pooler gathers.
-                _write_stats(struct, out_path.parent, cfg.saturation.enabled,
-                             label=out_path.parent.name,
-                             write_files=cfg.statistics.per_structure,
-                             write_metrics_file=cfg.statistics.pooled)
-        except Exception as exc:   # keep the sweep going; report what was skipped
-            record["status"] = "failed"
-            record["error"] = f"{type(exc).__name__}: {exc}"
-            print(f"[runner] FAILED seed={entry['seed']} alpha={entry['alpha']}: "
-                  f"{type(exc).__name__}: {exc}")
-        manifest.append(record)
+    written = [Path(r["output_path"]) for r in records if r["status"] == "ok"]
+    _write_manifest(cfg, records, shard=shard, num_shards=num_shards)
 
-    _write_manifest(cfg, manifest)
-
+    # A single shard only ever sees its own slabs, so pooling there would be incomplete and
+    # would race other shards on stats_pooled.json. Pool after generation in the unsharded
+    # case; otherwise run `--pool-only` once after all array tasks finish.
     if cfg.statistics.enabled and cfg.statistics.pooled:
-        _pool_stats(cfg)
+        if num_shards is None:
+            _pool_stats(cfg)
+        else:
+            print(f"[runner] sharded run: skipping pooled statistics; run "
+                  f"`--pool-only` over {cfg.run.output_dir} after all shards finish")
     return written
 
 
-def _write_manifest(cfg: RunConfig, records: list[dict]) -> Path:
-    """Write a per-run ``manifest.json`` recording each combo's status/output/error.
+def _write_manifest(cfg: RunConfig, records: list[dict],
+                    shard: Optional[int] = None, num_shards: Optional[int] = None) -> Path:
+    """Write a manifest recording each combo's status/output/error.
 
-    Makes a sweep auditable and resumable: a re-run can skip combos already marked
-    ``ok`` and failures are visible without scraping stdout. Never aborts the run."""
+    Makes a sweep auditable and resumable: a re-run can skip combos already marked ``ok``
+    and failures are visible without scraping stdout. Sharded tasks each write their own
+    ``manifest.shard{i}of{N}.json`` (no overwrite); ``--pool-only`` later merges them into
+    ``manifest.json``. Never aborts the run."""
     out_root = Path(cfg.run.output_dir)
     out_root.mkdir(parents=True, exist_ok=True)
-    path = out_root / "manifest.json"
+    name = "manifest.json" if num_shards is None else f"manifest.shard{shard}of{num_shards}.json"
+    path = out_root / name
     payload = {
         "output_dir": str(out_root),
+        "shard": shard,
+        "num_shards": num_shards,
         "total": len(records),
         "succeeded": sum(1 for r in records if r["status"] == "ok"),
         "failed": sum(1 for r in records if r["status"] == "failed"),
@@ -267,6 +339,28 @@ def _write_manifest(cfg: RunConfig, records: list[dict]) -> Path:
         print(f"[runner] wrote manifest to {path}")
     except Exception as exc:
         print(f"[runner] manifest FAILED: {type(exc).__name__}: {exc}")
+    return path
+
+
+def _merge_manifests(out_root: Path) -> Optional[Path]:
+    """Combine per-shard manifests under ``out_root`` into a single ``manifest.json``.
+    Idempotent; returns the merged path, or None if there were no shard manifests."""
+    shard_files = sorted(out_root.glob("manifest.shard*of*.json"))
+    if not shard_files:
+        return None
+    combos: list = []
+    for f in shard_files:
+        combos.extend(json.loads(f.read_text()).get("combos", []))
+    payload = {
+        "output_dir": str(out_root),
+        "shards": len(shard_files),
+        "total": len(combos),
+        "succeeded": sum(1 for c in combos if c["status"] == "ok"),
+        "failed": sum(1 for c in combos if c["status"] == "failed"),
+        "combos": combos,
+    }
+    path = out_root / "manifest.json"
+    path.write_text(json.dumps(payload, indent=2))
     return path
 
 
@@ -312,6 +406,9 @@ def pool_from_config(source: Union[str, Path, dict, RunConfig]) -> None:
     output_dir and (re)write the pooled report. Run once after a parallel/sharded sweep
     (where each task generates its slabs but the single pooled report is built here)."""
     cfg = source if isinstance(source, RunConfig) else load_config(source)
+    merged = _merge_manifests(Path(cfg.run.output_dir))
+    if merged is not None:
+        print(f"[runner] merged shard manifests -> {merged}")
     if not (cfg.statistics.enabled and cfg.statistics.pooled):
         print("[runner] statistics.pooled is disabled; nothing to pool")
         return

@@ -1,10 +1,13 @@
 """Tests for the config runner (runner.runner) and CLI."""
+from pathlib import Path
+
 import numpy as np
 import pytest
 from ase.io import read
 
 from runner.config import load_config, CalculatorSpec
-from runner.runner import resolve_plan, build_calculator, run_from_config, pool_from_config, _combo_seed
+from runner.runner import (resolve_plan, build_calculator, run_from_config, pool_from_config,
+                           _combo_seed, _shard_plan)
 
 
 def _blank_cfg(tmp_path, **run):
@@ -169,6 +172,83 @@ def test_manifest_records_every_combo(tmp_path, monkeypatch):
     assert manifest["total"] == 2 and manifest["succeeded"] == 2 and manifest["failed"] == 0
     assert {c["seed"] for c in manifest["combos"]} == {0, 1}
     assert all(c["status"] == "ok" for c in manifest["combos"])
+
+
+# --- Phase 1: sharding + in-node parallel pool -------------------------------------
+
+def test_shard_plan_is_disjoint_and_exhaustive():
+    plan = list(range(10))
+    shards = [_shard_plan(plan, i, 3) for i in range(3)]
+    flat = sorted(x for s in shards for x in s)
+    assert flat == plan                                  # union == whole plan
+    assert sum(len(s) for s in shards) == len(plan)      # no overlap
+    assert _shard_plan(plan, None, None) == plan         # no sharding -> untouched
+
+
+def test_shard_plan_validation():
+    with pytest.raises(ValueError):
+        _shard_plan([1, 2], 0, None)        # shard without num_shards
+    with pytest.raises(ValueError):
+        _shard_plan([1, 2], None, 2)        # num_shards without shard
+    with pytest.raises(ValueError):
+        _shard_plan([1, 2], 3, 3)           # shard out of range
+
+
+def test_sharded_runs_then_pool_reduce(tmp_path, monkeypatch):
+    # Each shard generates its slice serially (workers=1 keeps the dummy monkeypatch in
+    # process), writes its own manifest, and skips pooling. The reduce merges manifests
+    # and pools all structures off disk -- the cross-shard collection guarantee.
+    import json
+    from tests.dummy_interface import DummyInterface
+    monkeypatch.setattr("runner.runner.build_calculator",
+                        lambda spec: DummyInterface(dump_path=str(tmp_path / "dump")))
+    cfg = _blank_cfg(tmp_path, seeds=[0, 1, 2, 3])
+    run_from_config(cfg, shard=0, num_shards=2)
+    run_from_config(cfg, shard=1, num_shards=2)
+
+    out = tmp_path / "out"
+    assert {p.name for p in out.glob("manifest.shard*of*.json")} == \
+        {"manifest.shard0of2.json", "manifest.shard1of2.json"}
+    assert not (out / "stats_pooled.json").exists()      # sharded runs defer pooling
+
+    pool_from_config(cfg)                                # reduce step
+    merged = json.loads((out / "manifest.json").read_text())
+    assert merged["total"] == 4 and merged["succeeded"] == 4
+    assert json.loads((out / "stats_pooled.json").read_text())["summary"]["n_structures"] == 4
+
+
+def test_worker_functions_build_and_run(tmp_path, monkeypatch):
+    # In-process check of the pool's worker functions (no subprocess): the initializer
+    # builds the calculators into _WORKER and _worker_run produces a correct record.
+    import runner.runner as RR
+    from tests.dummy_interface import DummyInterface
+    monkeypatch.setattr("runner.runner.build_calculator",
+                        lambda spec: DummyInterface(dump_path=str(tmp_path / "dump")))
+    cfg = _blank_cfg(tmp_path, seeds=[0])
+    cfg.statistics.enabled = False
+    entry = resolve_plan(cfg)[0]
+
+    RR._worker_init(cfg, threads=1, calc_provider=RR._default_calc_provider)
+    assert RR._WORKER["growth"] is not None
+    record = RR._worker_run(entry)
+    assert record["status"] == "ok"
+    assert Path(record["output_path"]).exists()
+
+
+def test_run_from_config_parallel_pool_matches_serial(tmp_path):
+    # Real ProcessPoolExecutor under the platform default (spawn). The picklable
+    # calc_provider lets workers build the LJ dummy without LAMMPS/torch.
+    import json
+    from tests.dummy_interface import dummy_calc_provider
+
+    cfg = _blank_cfg(tmp_path, seeds=[0, 1, 2, 3])
+    cfg.statistics.enabled = False
+    written = run_from_config(cfg, workers=2, threads=1, calc_provider=dummy_calc_provider)
+
+    assert len(written) == 4
+    assert all(p.exists() for p in written)
+    man = json.loads((tmp_path / "out" / "manifest.json").read_text())
+    assert man["total"] == 4 and man["succeeded"] == 4
 
 
 # --- CLI ---------------------------------------------------------------------------
