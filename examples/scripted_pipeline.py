@@ -8,12 +8,6 @@ from pathlib import Path
 from rules import PeriodicStructureModifier, AvoidMotifSwapRule
 
 def main():
-    # calc = MACEInterface(
-    #     mace_model_path="test_model/MACE-matpes-r2scan-omat-ft.model",
-    #     device="cuda",
-    #     use_dispersion=True,
-    #     dispersion_xc="r2scan",
-    # )
     calc = LMPInterface(dump_path="dump_lmp")
     struct = initialize_structure_blank(cell=[20, 20, 40])
     struct.set_seed(42)

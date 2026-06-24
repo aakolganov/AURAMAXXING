@@ -38,9 +38,9 @@ def test_sample_dist_supports_are_nonnegative():
 # corrupting every CN-driven decision downstream (anchor weighting, saturation, charge).
 
 def test_growth_sample_bond_lengths_within_bonding_cutoff():
-    from default_constants import sample_dist, pair_cutoffs, OXIDATION_POS, OXIDATION_NEG
+    from default_constants import sample_dist, pair_cutoffs, OXIDATION_POS
 
-    cation, anion = set(OXIDATION_POS), set(OXIDATION_NEG)
+    cation = set(OXIDATION_POS)
     checked = 0
     for anchor, rs in sample_dist.items():
         for added in list(rs.keys()):

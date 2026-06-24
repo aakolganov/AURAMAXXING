@@ -17,15 +17,6 @@ _ANION = next(iter(OXIDATION_NEG))            # "O"
 _OH_CATIONS = [e for e in OXIDATION_POS if e != "H"]
 
 
-def fixed_indices(struct) -> set:
-    """Indices held fixed by any ASE constraint (e.g. a FixAtoms substrate)."""
-    fixed: set = set()
-    for constraint in struct.atoms.constraints:
-        if hasattr(constraint, "get_indices"):
-            fixed.update(int(i) for i in constraint.get_indices())
-    return fixed
-
-
 def _tau4_indices(angles_deg: list[float]) -> tuple[float, float]:
     """tau4 and tau4' from the six L-centre-L angles of a 4-coordinate centre.
 
@@ -48,7 +39,7 @@ def analyze_structure(struct, is_saturation: bool = False) -> dict:
     n = len(atoms)
     symbols = np.array(atoms.get_chemical_symbols())
     graph = struct.get_graph()
-    fixed = fixed_indices(struct)
+    fixed = struct.fixed_indices()
     mobile = np.array([i not in fixed for i in range(n)], dtype=bool)
 
     elements = sorted(set(symbols.tolist()))

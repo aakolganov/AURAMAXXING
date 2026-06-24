@@ -176,7 +176,11 @@ class LMPInterface(CalculatorInterface):
         Annealing means starting hot and quenching, so call with T_ini > T_fin.
         Returns one target per MD step, linearly interpolated from T_ini to T_fin.
         """
-        return [linear_temperature_schedule(step, steps, T_ini, T_fin) for step in range(steps)]
+        # Divide by steps-1 so the final step lands exactly on T_fin (matching the Langevin
+        # AnnealingLangevin frac convention, which divides by max(1, total_steps-1)); guard
+        # steps == 1. The previous denominator `steps` stopped one step short of T_fin.
+        denom = max(1, steps - 1)
+        return [linear_temperature_schedule(step, denom, T_ini, T_fin) for step in range(steps)]
 
     def anneal(self, atoms: Atoms, T_ini: float, T_fin: float,
             steps: int = 500, dt: float = 1.0,

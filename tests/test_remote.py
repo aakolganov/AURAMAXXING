@@ -129,7 +129,7 @@ def test_mace_batched_matches_sequential():
         req(["O", "Si"], [[5, 5, 5], [6.6, 5, 5]]),
     ]
     batched = _mace_batched_eval(calc, reqs)
-    for r, b in zip(reqs, batched):
+    for r, b in zip(reqs, batched, strict=True):
         seq = _eval_one(calc, r)
         assert abs(seq["energy"] - b["energy"]) < 1e-6
         assert np.abs(seq["forces"] - b["forces"]).max() < 1e-6

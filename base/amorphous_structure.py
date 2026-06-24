@@ -291,6 +291,16 @@ class AmorphousStruc:
         return net_charge
 
 
+    def fixed_indices(self) -> set:
+        """Indices held fixed by any ASE constraint (e.g. a FixAtoms substrate carried in
+        from a VASP POSCAR's Selective Dynamics)."""
+        fixed: set = set()
+        for constraint in self.atoms.constraints:
+            if hasattr(constraint, "get_indices"):
+                fixed.update(int(i) for i in constraint.get_indices())
+        return fixed
+
+
 def AmorphousStruc_factory(
     atoms: Optional[Atoms] = None,
     symbols: Optional[Sequence[str]] = None,

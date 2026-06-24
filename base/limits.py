@@ -70,6 +70,11 @@ def make_limits_fourier(
                     dy=amorphous_struc.atoms.cell.cellpar()[1] / steps,
                 )
     else:
+        if init_limit.shape != (amorphous_struc.limits.nx, amorphous_struc.limits.ny):
+            raise ValueError(
+                f"the new '{is_for}' limit has shape {init_limit.shape}, but the existing "
+                f"limits grid is ({amorphous_struc.limits.nx}, {amorphous_struc.limits.ny}); "
+                "both sides must be built with the same 'steps'")
         match is_for:
             case "top":
                 amorphous_struc.limits.upper_lim = init_limit
@@ -104,6 +109,11 @@ def make_limit_flat(
                     dy=amorphous_struc.atoms.cell.cellpar()[1] / steps,
                 )
     else:
+        if init_limit.shape != (amorphous_struc.limits.nx, amorphous_struc.limits.ny):
+            raise ValueError(
+                f"the new '{is_for}' limit has shape {init_limit.shape}, but the existing "
+                f"limits grid is ({amorphous_struc.limits.nx}, {amorphous_struc.limits.ny}); "
+                "both sides must be built with the same 'steps'")
         match is_for:
             case "top":
                 amorphous_struc.limits.upper_lim = init_limit

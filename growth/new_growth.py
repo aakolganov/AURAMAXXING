@@ -145,8 +145,6 @@ def finalize_structure(
     # Drop any leftover MD velocities (set by a growth-time anneal) so the finalized
     # structure is static and is written without a spurious velocity block.
     amorphous_struct.atoms.arrays.pop("momenta", None)
-    # move_limits(amorphous_struct, move_limit="both")
-    # slice_structure(amorphous_struct)
 
     return initial_num_atoms == len(amorphous_struct)
 
