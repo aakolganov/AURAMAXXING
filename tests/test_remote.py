@@ -72,6 +72,39 @@ def test_remote_timeout_fails_fast(tmp_path):
     assert time.time() - t < 5.0       # failed fast, did not hang
 
 
+def test_remote_calc_discards_stale_reply():
+    # H4: after a worker times out on a slow request, the evaluator may still deliver that
+    # request's (now-stale) reply later. The proxy must recognise it by token and discard it,
+    # not read it as the NEXT request's result -- which would silently drive the optimizer with
+    # energy/forces computed for a different configuration. Pure CPU, no evaluator process.
+    import queue
+    import threading
+    from ase import Atoms
+    from interfaces.remote_calculator import RemoteASECalculator
+
+    req_q, resp_q = queue.Queue(), queue.Queue()
+    calc = RemoteASECalculator(req_q, resp_q, worker_id=0, timeout=5.0)
+
+    def fake_evaluator():
+        req = req_q.get(timeout=5.0)
+        n = len(req["numbers"])
+        # A late reply from a previously-abandoned request (wrong token) arrives FIRST ...
+        resp_q.put({"token": req["token"] + 9999, "energy": -111.0, "forces": np.zeros((n, 3))})
+        # ... then the correct reply for THIS request.
+        resp_q.put({"token": req["token"], "energy": 42.0, "forces": np.ones((n, 3))})
+
+    t = threading.Thread(target=fake_evaluator)
+    t.start()
+    try:
+        atoms = Atoms("H2", positions=[[0, 0, 0], [0.74, 0, 0]], cell=[10, 10, 10], pbc=True)
+        atoms.calc = calc
+        energy = atoms.get_potential_energy()
+        assert energy == 42.0                              # matched reply, not the stale -111.0
+        assert np.allclose(atoms.get_forces(), 1.0)        # forces from the matched reply
+    finally:
+        t.join(timeout=5.0)
+
+
 @pytest.mark.heavy
 def test_mace_batched_matches_sequential():
     # #4 correctness: the batched forward pass must equal per-config evaluation (the basis for

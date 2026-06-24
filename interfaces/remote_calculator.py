@@ -38,22 +38,38 @@ class RemoteASECalculator(Calculator):
         self._response_q = response_q
         self._worker_id = worker_id
         self._timeout = timeout
+        # Per-worker monotonic request counter. Each request carries a token echoed back in
+        # its reply; this worker only ever has one request outstanding, so the token lets us
+        # tell the current reply from a late one for a request we already gave up on.
+        self._seq = 0
 
     def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
         super().calculate(atoms, properties, system_changes)
+        self._seq += 1
+        token = self._seq
         self._request_q.put({
             "id": self._worker_id,
+            "token": token,
             "numbers": atoms.get_atomic_numbers(),
             "positions": atoms.get_positions(),
             "cell": np.asarray(atoms.get_cell()),
             "pbc": np.asarray(atoms.get_pbc()),
         })
-        try:
-            result = self._response_q.get(timeout=self._timeout)
-        except _queue.Empty:
-            raise RuntimeError(
-                f"remote evaluator did not respond within {self._timeout:.0f}s "
-                f"(evaluator dead or wedged)")
+        # Wait for THIS request's reply. A reply whose token doesn't match belongs to an
+        # earlier request this worker abandoned on timeout (the evaluator never drops a
+        # request, only the worker does); discard it and keep waiting, otherwise it would be
+        # read as this request's result and silently drive the optimizer with forces computed
+        # for a stale configuration. Tokens are monotonic and never reused, so a stale reply's
+        # token is always < token and can never spuriously match.
+        while True:
+            try:
+                result = self._response_q.get(timeout=self._timeout)
+            except _queue.Empty:
+                raise RuntimeError(
+                    f"remote evaluator did not respond within {self._timeout:.0f}s "
+                    f"(evaluator dead or wedged)")
+            if result.get("token") == token:
+                break
         if "error" in result:
             raise RuntimeError(f"remote evaluator failed: {result['error']}")
         energy = float(result["energy"])
@@ -185,4 +201,7 @@ def evaluator_loop(request_q, response_qs, calc_factory, device: str = "cuda",
             replies = [_eval_one(calc, b) for b in batch]
 
         for req, reply in zip(batch, replies):
+            # Echo the request's token so the requester can match this reply to the request it
+            # is currently blocked on (and discard a late reply for an abandoned one).
+            reply["token"] = req.get("token")
             response_qs[req["id"]].put(reply)
