@@ -108,7 +108,8 @@ def test_statistics_per_structure_off_keeps_pooled(tmp_path, monkeypatch):
 
 def test_combo_seed_decorrelates_and_reproduces():
     # Same (seed, alpha) -> identical stream; differing in either -> different stream.
-    draw = lambda rng: rng.integers(0, 2**31, size=8).tolist()
+    def draw(rng):
+        return rng.integers(0, 2**31, size=8).tolist()
     assert draw(_combo_seed(0, 1.0)) == draw(_combo_seed(0, 1.0))      # reproducible
     assert draw(_combo_seed(0, 0.01)) != draw(_combo_seed(0, 1.0))     # alpha decorrelates
     assert draw(_combo_seed(0, None)) != draw(_combo_seed(1, None))    # seed decorrelates

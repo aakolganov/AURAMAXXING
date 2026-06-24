@@ -78,10 +78,12 @@ def pick_next_atom_type(amorphous_struct: AmorphousStruc, target_ratio: dict[str
     for key, val in target_ratio.items():
         target_frac[key] = val / total
 
+    # Fractions are taken over the target elements only, so pre-existing atoms of other
+    # elements (e.g. a loaded substrate of a foreign element) don't skew the balance.
     symbols = np.array(amorphous_struct.symbols)
-    current_frac = {}
-    for symbol in target_ratio.keys():
-        current_frac[symbol] = np.count_nonzero(symbols == symbol) / num_atoms
+    target_counts = {s: int(np.count_nonzero(symbols == s)) for s in target_ratio}
+    target_total = sum(target_counts.values()) or 1
+    current_frac = {s: target_counts[s] / target_total for s in target_ratio}
 
     deficits = {
         symbol: target_frac[symbol] - current_frac.get(symbol, 0.0)

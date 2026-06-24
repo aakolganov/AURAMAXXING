@@ -57,6 +57,7 @@ class CalculatorInterface(ABC):
         out_dir = Path(workdir) if workdir is not None else self.dump_path
         out_dir.mkdir(parents=True, exist_ok=True)
 
+        fmt = fmt or "xyz"   # a caller may pass traj_fmt=None explicitly; fall back to xyz
         full_filename = f"{filename}.{fmt}"
         filepath = out_dir / full_filename
         if Path(filepath).exists():

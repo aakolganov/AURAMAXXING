@@ -69,6 +69,9 @@ default_masses = {
     "Al": 27.0,
     "H": 1.008
 }
+# Only the Legacy LAMMPS interface (Legacy/LAMMPS_Interface.py) reads these. The active
+# interfaces.LAMMPS_Interface uses bks_charges, and AmorphousStruc.charge() uses
+# OXIDATION_POS/NEG -- so this table is not live config; kept in sync with bks_charges.
 default_charges = {
     "Si": 2.4,
     "O": -1.2,

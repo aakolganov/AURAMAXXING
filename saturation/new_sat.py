@@ -16,7 +16,19 @@ from helpers.atom_placing import place_atom_sphere, place_atom_force
 # Bond lengths used when attaching saturation groups: O onto an under-coordinated
 # Si/Al (El_O_BONDLENGTH ~ 1.63 A) and H onto an O (O_H_BONDLENGTH ~ 0.98 A).
 DEFAULT_SAT_BOND_LENGTHS = {"O": El_O_BONDLENGTH, "H": O_H_BONDLENGTH}
-    
+
+
+def _try_then_force_place(amorphous_struct, place_atom: str, attach_idx: int, *,
+                          num_samples: int, bond_lengths: dict) -> None:
+    """Attach ``place_atom`` to ``attach_idx`` at its saturation bond length: try the
+    collision-aware spherical placement first, and fall back to the always-succeeds
+    least-overlap placement if that is sterically blocked, so a cap is always added."""
+    if not place_atom_sphere(amorphous_struct, atom_type=place_atom, idx_anchor=attach_idx,
+                             num_samples=num_samples, bond_length=bond_lengths[place_atom]):
+        place_atom_force(amorphous_struct, atom_type=place_atom, idx_anchor=attach_idx,
+                         num_samples=num_samples, bond_length=bond_lengths[place_atom])
+
+
 def move_atom(
     amorph_struct: AmorphousStruc,
     idx_move: int,
@@ -124,14 +136,6 @@ def select_idx_for_move(amorphous_struct: AmorphousStruc,
     return idx_furthest, chosen_idx
 
 
-def _fixed_indices(amorphous_struct) -> set:
-    fixed: set = set()
-    for constraint in amorphous_struct.atoms.constraints:
-        if hasattr(constraint, "get_indices"):
-            fixed.update(int(i) for i in constraint.get_indices())
-    return fixed
-
-
 def _prune_orphans_from_move(amorphous_struct, cn_before, n_before: int) -> int:
     """Remove atoms that the move in this iteration orphaned and the re-cap did not fix.
 
@@ -143,7 +147,7 @@ def _prune_orphans_from_move(amorphous_struct, cn_before, n_before: int) -> int:
     re-cap (index >= ``n_before``) and pre-existing isolated atoms are left untouched."""
     amorphous_struct.get_graph(force_rebuild=True)
     cn_now = amorphous_struct.get_cn()
-    fixed = _fixed_indices(amorphous_struct)
+    fixed = amorphous_struct.fixed_indices()
     orphans = [i for i in range(n_before)
                if i not in fixed and cn_before[i] > 0 and cn_now[i] == 0]
     if not orphans:
@@ -185,28 +189,28 @@ def saturate_under_coordinated(
         amorphous_struct: AmorphousStruc,
         bond_lengths=None,
         num_samples: int = 250,
+        highlight_file: Optional[str] = None,
     ):
     """ Does the basic saturation of atoms through adding OH to positively charged and H to negatively charged. Does not Optimize structure."""
     if bond_lengths is None:
         bond_lengths = DEFAULT_SAT_BOND_LENGTHS
     amorphous_struct.atoms.wrap()
 
-    highlight_coordination(amorphous_struct, "highlighted_initial.xyz")
+    # Optional debug dump highlighting coordination defects; off by default so production
+    # runs don't write a file into the working directory.
+    if highlight_file is not None:
+        highlight_coordination(amorphous_struct, highlight_file)
     undr_cn = collect_over_or_under_cn_atoms(amorphous_struct, do_under=True)
-
-
-    def try_then_force_place(place_atom: str, attach_idx: int):
-        is_placed = place_atom_sphere(amorphous_struct, atom_type=place_atom, idx_anchor=attach_idx, num_samples=num_samples, bond_length=bond_lengths[place_atom])
-        if not is_placed:
-            is_placed = place_atom_force(amorphous_struct, atom_type=place_atom, idx_anchor=attach_idx, num_samples=num_samples, bond_length=bond_lengths[place_atom])
 
     for sym, idx_list in undr_cn.items():
         saturate_with_OH = sym in OXIDATION_POS
         for attach_idx in idx_list:
             if saturate_with_OH:
-                try_then_force_place("O", attach_idx)
+                _try_then_force_place(amorphous_struct, "O", attach_idx,
+                                      num_samples=num_samples, bond_lengths=bond_lengths)
                 attach_idx = len(amorphous_struct) - 1 # to account for the 0 index
-            try_then_force_place("H", attach_idx)
+            _try_then_force_place(amorphous_struct, "H", attach_idx,
+                                  num_samples=num_samples, bond_lengths=bond_lengths)
 
 
 def correct_charge(
@@ -225,10 +229,6 @@ def correct_charge(
     """
     if bond_lengths is None:
         bond_lengths = DEFAULT_SAT_BOND_LENGTHS
-    def try_then_force_place(place_atom: str, attach_idx: int):
-        is_placed = place_atom_sphere(amorphous_struct, atom_type=place_atom, idx_anchor=attach_idx, num_samples=num_samples, bond_length=bond_lengths[place_atom])
-        if not is_placed:
-            is_placed = place_atom_force(amorphous_struct, atom_type=place_atom, idx_anchor=attach_idx, num_samples=num_samples, bond_length=bond_lengths[place_atom])
 
     current_charge = amorphous_struct.charge()
     iteration = 0
@@ -270,9 +270,11 @@ def correct_charge(
 
         attach_idx = idx_furthest
         if current_charge > 0:
-            try_then_force_place("O", attach_idx)
+            _try_then_force_place(amorphous_struct, "O", attach_idx,
+                                  num_samples=num_samples, bond_lengths=bond_lengths)
             attach_idx = len(amorphous_struct) - 1
-        try_then_force_place("H", attach_idx)
+        _try_then_force_place(amorphous_struct, "H", attach_idx,
+                              num_samples=num_samples, bond_lengths=bond_lengths)
         # Drop any atom the move orphaned that the re-cap above failed to bond, so it can't
         # dangle in the output or crash a later iteration's move selection.
         removed = _prune_orphans_from_move(amorphous_struct, cn_before, n_before)

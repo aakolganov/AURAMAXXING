@@ -299,9 +299,7 @@ def slice_structure(amorphous_struct: AmorphousStruc) -> None:
     # 3. Never remove fixed atoms (e.g. a frozen substrate). They can legitimately
     #    sit outside the growth volume, and dropping them would also collapse the
     #    FixAtoms constraint so the substrate would no longer be held during finalize.
-    for constraint in amorphous_struct.atoms.constraints:
-        if hasattr(constraint, "get_indices"):
-            keep_mask[constraint.get_indices()] = True
+    keep_mask[list(amorphous_struct.fixed_indices())] = True
 
     # 4. Remove atoms that are not in the keep mask
     remove_mask = ~keep_mask

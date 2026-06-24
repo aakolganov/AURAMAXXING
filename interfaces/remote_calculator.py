@@ -67,7 +67,7 @@ class RemoteASECalculator(Calculator):
             except _queue.Empty:
                 raise RuntimeError(
                     f"remote evaluator did not respond within {self._timeout:.0f}s "
-                    f"(evaluator dead or wedged)")
+                    f"(evaluator dead or wedged)") from None
             if result.get("token") == token:
                 break
         if "error" in result:
@@ -200,7 +200,7 @@ def evaluator_loop(request_q, response_qs, calc_factory, device: str = "cuda",
         else:
             replies = [_eval_one(calc, b) for b in batch]
 
-        for req, reply in zip(batch, replies):
+        for req, reply in zip(batch, replies, strict=True):
             # Echo the request's token so the requester can match this reply to the request it
             # is currently blocked on (and discard a late reply for an abandoned one).
             reply["token"] = req.get("token")

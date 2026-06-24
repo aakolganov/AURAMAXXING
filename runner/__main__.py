@@ -44,6 +44,9 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--batch-size", type=int, default=None, metavar="B",
                         help="max requests the --remote evaluator coalesces into one forward "
                              "pass (default = --workers). 1 disables batching.")
+    parser.add_argument("--evaluator-threads", type=int, default=None, metavar="N",
+                        help="cap the --remote GPU evaluator process to N compute threads "
+                             "(default: unset; the evaluator is GPU-bound so this rarely matters).")
     args = parser.parse_args(argv)
 
     # Apply before generation: the heavy backends (LAMMPS, torch/MACE) import lazily in
@@ -80,7 +83,8 @@ def main(argv: Optional[list] = None) -> int:
     if args.remote:
         from .remote_run import run_remote_from_config
         run_remote_from_config(cfg, workers=args.workers, worker_threads=args.threads,
-                               device=args.device, batch_size=args.batch_size,
+                               device=args.device, evaluator_threads=args.evaluator_threads,
+                               batch_size=args.batch_size,
                                shard=args.shard, num_shards=args.num_shards, resume=args.resume)
     else:
         run_from_config(cfg, workers=args.workers, threads=args.threads,

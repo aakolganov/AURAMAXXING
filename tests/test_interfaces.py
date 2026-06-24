@@ -41,7 +41,7 @@ def test_uma_interface_module_imports():
 
 
 @pytest.mark.lammps
-def test_lammps_anneal_runs_end_to_end(make_struct):
+def test_lammps_anneal_runs_end_to_end(make_struct, tmp_path):
     """Real BKS MD: anneal completes and leaves finite geometry/energy."""
     pytest.importorskip("lammps")
     from interfaces.LAMMPS_Interface import LMPInterface
@@ -51,7 +51,7 @@ def test_lammps_anneal_runs_end_to_end(make_struct):
         [[5, 5, 5], [6.6, 5, 5], [3.4, 5, 5], [8, 5, 5], [9.6, 5, 5]],
         cell=(15.0, 15.0, 15.0),
     )
-    calc = LMPInterface(dump_path="dump_lmp_anneal_test")
+    calc = LMPInterface(dump_path=str(tmp_path / "d"))
     calc.anneal(s.atoms, T_ini=2000.0, T_fin=300.0, steps=20)
 
     assert np.all(np.isfinite(s.atoms.get_positions()))
@@ -95,7 +95,7 @@ def test_lammps_optimize_twice_consistent(make_struct, tmp_path):
 
 
 @pytest.mark.lammps
-def test_lammps_optimize_runs(make_struct):
+def test_lammps_optimize_runs(make_struct, tmp_path):
     pytest.importorskip("lammps")
     from interfaces.LAMMPS_Interface import LMPInterface
 
@@ -104,6 +104,6 @@ def test_lammps_optimize_runs(make_struct):
         [[5, 5, 5], [6.6, 5, 5], [3.4, 5, 5]],
         cell=(15.0, 15.0, 15.0),
     )
-    calc = LMPInterface(dump_path="dump_lmp_opt_test")
+    calc = LMPInterface(dump_path=str(tmp_path / "d"))
     calc.optimize(s.atoms, fmax=1.0, max_steps=10)
     assert np.isfinite(s.atoms.get_potential_energy())
