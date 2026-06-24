@@ -107,3 +107,33 @@ def test_correct_charge_prunes_move_orphans(make_struct):
     assert removed == 1                              # the orphaned O is dropped
     s.get_graph(force_rebuild=True)
     assert int(np.sum(np.asarray(s.get_cn()) == 0)) == 0   # nothing left isolated
+
+
+# --- M7: correct_charge must drive a fixable charged slab to net-zero formal charge -----
+# The other correct_charge tests cover only degenerate paths (already neutral, or unsatisfiable
+# -> stop). These exercise the convergence loop itself and assert it reaches charge() == 0.
+
+def test_correct_charge_neutralises_negative_slab(make_struct):
+    from saturation.new_sat import correct_charge
+    # Two Al each bonded to two O: net formal charge 2*(+3) + 4*(-2) = -2. Each under-coordinated
+    # Al is capped with an H (+1), so the loop drives the charge to zero.
+    s = make_struct(["Al", "Al", "O", "O", "O", "O"],
+                    [[5, 5, 5], [5, 5, 12], [6.8, 5, 5], [3.2, 5, 5], [6.8, 5, 12], [3.2, 5, 12]],
+                    cell=(16.0, 16.0, 20.0))
+    assert s.charge() == -2
+    n0 = len(s)
+    correct_charge(s, max_iterations=50)
+    assert s.charge() == 0          # the loop converged (not a degenerate no-op)
+    assert len(s) > n0              # caps were actually added
+
+
+def test_correct_charge_neutralises_positive_slab(make_struct):
+    from saturation.new_sat import correct_charge
+    # An over-coordinated O bonded to three Si (a tricluster): net charge 3*(+4) + (-2) = +10.
+    # correct_charge adds OH groups (net -1 each) until neutral.
+    s = make_struct(["O", "Si", "Si", "Si"],
+                    [[7, 7, 7], [8.6, 7, 7], [5.4, 7, 7], [7, 8.6, 7]],
+                    cell=(16.0, 16.0, 16.0))
+    assert s.charge() == 10
+    correct_charge(s, max_iterations=200)
+    assert s.charge() == 0

@@ -112,6 +112,15 @@ def _supports_batching(calc) -> bool:
     return hasattr(calc, "_atoms_to_batch") and isinstance(models, (list, tuple)) and len(models) == 1
 
 
+def _split_batched_output(energies, forces, ptr, e_conv: float, f_conv: float, n: int) -> list:
+    """Split one batched forward pass into per-config energy+forces using the batch ``ptr``
+    atom offsets (graph i owns force rows ``ptr[i]:ptr[i+1]``), applying the calculator's unit
+    conversions. Pure numpy, so the (off-by-one prone) slicing is unit-testable without torch."""
+    return [{"energy": float(energies[i]) * e_conv,
+             "forces": np.asarray(forces[ptr[i]:ptr[i + 1]] * f_conv)}
+            for i in range(n)]
+
+
 def _mace_real_graph(calc, atoms):
     """Build the single-config ``AtomicData`` exactly as ``MACECalculator._atoms_to_batch``
     does (same key spec, z-table, cutoff, dtype), so a batch of these reproduces per-config
@@ -153,9 +162,7 @@ def _mace_batched_eval(calc, reqs: list) -> list:
     energies = out["energy"].detach().double().cpu().numpy()
     forces = out["forces"].detach().double().cpu().numpy()
     ptr = batch.ptr.detach().cpu().numpy()
-    return [{"energy": float(energies[i]) * e_conv,
-             "forces": np.asarray(forces[ptr[i]:ptr[i + 1]] * f_conv)}
-            for i in range(len(reqs))]
+    return _split_batched_output(energies, forces, ptr, e_conv, f_conv, len(reqs))
 
 
 def evaluator_loop(request_q, response_qs, calc_factory, device: str = "cuda",
