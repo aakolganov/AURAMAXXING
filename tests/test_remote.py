@@ -105,6 +105,53 @@ def test_remote_calc_discards_stale_reply():
         t.join(timeout=5.0)
 
 
+def test_supports_batching_predicate():
+    # The evaluator only takes the batched path for a SINGLE-model MACE calculator (one whose
+    # _atoms_to_batch preprocessing it can reuse); ensembles and non-MACE calcs must not.
+    from interfaces.remote_calculator import _supports_batching
+
+    class _SingleModelMace:
+        def _atoms_to_batch(self, *a):
+            return None
+        models = [object()]
+
+    class _Ensemble:
+        def _atoms_to_batch(self, *a):
+            return None
+        models = [object(), object()]
+
+    class _LJ:
+        pass
+
+    assert _supports_batching(_SingleModelMace()) is True
+    assert _supports_batching(_Ensemble()) is False     # >1 model -> per-config path
+    assert _supports_batching(_LJ()) is False            # no _atoms_to_batch / models
+
+
+def test_split_batched_output_matches_per_config():
+    # The batched path runs ONE forward pass over collated graphs, then splits energy/forces per
+    # config via the batch `ptr` offsets and applies unit conversions. This pins that split (the
+    # off-by-one-prone part of the batched==serial guarantee) against a manual slice -- no torch.
+    from interfaces.remote_calculator import _split_batched_output
+
+    sizes = [3, 5, 2]                          # three configs of differing atom counts
+    ptr = np.cumsum([0, *sizes])               # [0, 3, 8, 10]
+    rng = np.random.default_rng(0)
+    energies = rng.normal(size=len(sizes))
+    forces = rng.normal(size=(int(ptr[-1]), 3))
+    e_conv, f_conv = 2.0, 3.0                   # arbitrary nontrivial unit conversions
+
+    out = _split_batched_output(energies, forces, ptr, e_conv, f_conv, len(sizes))
+
+    assert len(out) == len(sizes)
+    for i, n in enumerate(sizes):
+        assert out[i]["energy"] == float(energies[i]) * e_conv
+        assert out[i]["forces"].shape == (n, 3)
+        np.testing.assert_allclose(out[i]["forces"], forces[ptr[i]:ptr[i + 1]] * f_conv)
+    # stacking the per-config blocks must reconstruct the full converted batch (no gap/overlap)
+    np.testing.assert_allclose(np.vstack([o["forces"] for o in out]), forces * f_conv)
+
+
 @pytest.mark.heavy
 def test_mace_batched_matches_sequential():
     # #4 correctness: the batched forward pass must equal per-config evaluation (the basis for
