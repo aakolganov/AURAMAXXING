@@ -33,6 +33,7 @@ charge_correction: {enabled: true}
 dft:
   enabled: true
   packages: [vasp, cp2k]
+  slurm: true                      # also drop a ready-to-edit submit_dft_<pkg>.sbatch at the run root
   vasp:
     incar: {ENCUT: 500}            # example override; add any INCAR tag here
   cp2k:

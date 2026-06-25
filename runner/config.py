@@ -579,11 +579,12 @@ class DFTSpec:
     packages: list = field(default_factory=lambda: ["vasp", "cp2k"])
     vasp: dict = field(default_factory=dict)
     cp2k: dict = field(default_factory=dict)
+    slurm: bool = False   # also emit a ready-to-edit SLURM array submission script per package
 
     @classmethod
     def from_dict(cls, d: dict, where: str) -> "DFTSpec":
         d = _as_dict(d, where)
-        _check_keys(d, {"enabled", "packages", "vasp", "cp2k"}, where)
+        _check_keys(d, {"enabled", "packages", "vasp", "cp2k", "slurm"}, where)
         packages = d.get("packages", ["vasp", "cp2k"])
         if not isinstance(packages, list) or not packages:
             raise ValueError(f"{where}.packages: expected a non-empty list of package names")
@@ -596,7 +597,8 @@ class DFTSpec:
         _check_keys(vasp, {"incar", "kpoints"}, f"{where}.vasp")
         _check_keys(cp2k, {"project", "basis_set_file", "potential_file", "input"}, f"{where}.cp2k")
         return cls(enabled=bool(d.get("enabled", False)),
-                   packages=list(packages), vasp=dict(vasp), cp2k=dict(cp2k))
+                   packages=list(packages), vasp=dict(vasp), cp2k=dict(cp2k),
+                   slurm=bool(d.get("slurm", False)))
 
 
 # --- coordination merge -------------------------------------------------------------
