@@ -194,7 +194,16 @@ wavefunction/charge files kept.
 Every tag is overridable from YAML: `vasp.incar` / `vasp.kpoints` are merged onto our INCAR/
 KPOINTS defaults, and `cp2k.input` is **deep-merged** onto the CP2K section tree — a `null`
 value drops a tag, a new key adds one, so you can both adjust our settings and add your own.
-The same generator is also callable directly: `from dft import write_dft_inputs`.
+
+The same generator runs standalone on already-saved structures (no regeneration):
+
+```bash
+auramaxxing-dft output/siral70                      # every structure.vasp under the dir
+auramaxxing-dft structure.vasp --package cp2k       # one file, CP2K only
+auramaxxing-dft output/siral70 --config examples/config/siral70.yaml   # apply the dft: overrides
+```
+
+(or `from dft import write_dft_inputs` in Python).
 
 ## Running in parallel (HPC)
 
