@@ -6,8 +6,9 @@ from the seeded ``make_struct`` fixture; the end-to-end runner test uses the LJ 
 from types import SimpleNamespace
 
 import numpy as np
+from ase import Atoms
 from ase.constraints import FixAtoms
-from ase.io import read
+from ase.io import read, write
 
 from dft.api import write_dft_inputs
 from dft.common import deep_merge
@@ -178,3 +179,16 @@ def test_run_from_config_writes_dft_inputs(tmp_path, monkeypatch):
     assert (dft_dir / "vasp" / "INCAR").exists()
     assert (dft_dir / "vasp" / "POSCAR").exists()
     assert (dft_dir / "cp2k" / "test.inp").exists()
+
+
+# --- standalone CLI ----------------------------------------------------------------
+
+def test_cli_generates_inputs_for_directory(tmp_path):
+    from dft import cli
+    atoms = Atoms("SiO2", positions=[[5, 5, 5], [6.6, 5, 5], [5, 6.6, 5]],
+                  cell=[12.0, 12.0, 12.0], pbc=True)
+    write(str(tmp_path / "structure.vasp"), atoms, format="vasp")
+    rc = cli.main([str(tmp_path)])
+    assert rc == 0
+    assert (tmp_path / "dft" / "vasp" / "INCAR").exists()
+    assert (tmp_path / "dft" / "cp2k" / "amorphous_oxide.inp").exists()
