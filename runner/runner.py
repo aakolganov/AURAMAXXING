@@ -339,6 +339,15 @@ def run_from_config(source: Union[str, Path, dict, RunConfig], *,
         else:
             print(f"[runner] sharded run: skipping pooled statistics; run "
                   f"`--pool-only` over {cfg.run.output_dir} after all shards finish")
+
+    # Sweep-level DFT SLURM array script(s): like pooled stats, only the unsharded run sees
+    # every structure; a sharded sweep emits them from `--pool-only` once all tasks finish.
+    if cfg.dft.enabled and cfg.dft.slurm:
+        if num_shards is None:
+            _write_dft_slurm(cfg)
+        else:
+            print(f"[runner] sharded run: skipping DFT SLURM script; run `--pool-only` over "
+                  f"{cfg.run.output_dir} after all shards finish")
     return written
 
 
@@ -432,6 +441,23 @@ def _pool_stats(cfg: RunConfig) -> None:
         print(f"[runner] pooled statistics FAILED: {type(exc).__name__}: {exc}")
 
 
+def _write_dft_slurm(cfg: RunConfig) -> None:
+    """Write the ready-to-edit DFT SLURM array script(s) over the full plan. Built from the
+    DFT input dirs that exist on disk, so it covers exactly what was generated (across all
+    shards/workers). Never aborts the run."""
+    try:
+        from dft.slurm import write_slurm_scripts
+        dft_dirs = [entry["output_path"].parent / "dft" for entry in resolve_plan(cfg)]
+        project = cfg.dft.cp2k.get("project", "amorphous_oxide")
+        written = write_slurm_scripts(Path(cfg.run.output_dir), dft_dirs,
+                                      cfg.dft.packages, cp2k_project=project)
+        if written:
+            print(f"[runner] wrote DFT SLURM array script(s): "
+                  f"{', '.join(p.name for p in written)}")
+    except Exception as exc:
+        print(f"[runner] DFT SLURM script generation FAILED: {type(exc).__name__}: {exc}")
+
+
 def pool_from_config(source: Union[str, Path, dict, RunConfig]) -> None:
     """Reduce step: gather per-structure metrics already on disk under the config's
     output_dir and (re)write the pooled report. Run once after a parallel/sharded sweep
@@ -440,6 +466,8 @@ def pool_from_config(source: Union[str, Path, dict, RunConfig]) -> None:
     merged = _merge_manifests(Path(cfg.run.output_dir))
     if merged is not None:
         print(f"[runner] merged shard manifests -> {merged}")
+    if cfg.dft.enabled and cfg.dft.slurm:
+        _write_dft_slurm(cfg)
     if not (cfg.statistics.enabled and cfg.statistics.pooled):
         print("[runner] statistics.pooled is disabled; nothing to pool")
         return

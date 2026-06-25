@@ -158,6 +158,7 @@ run:
 dft:                        # optional step 3: write VASP/CP2K geo-opt inputs per structure
   enabled: false
   packages: [vasp, cp2k]    # any subset
+  slurm: false              # also drop a ready-to-edit SLURM array script per package
   vasp:
     incar:   {ENCUT: 550, MY_TAG: 1}    # override/add INCAR tags (null drops one)
     kpoints: {mode: gamma, grid: [1, 1, 1], shift: [0, 0, 0]}
@@ -195,11 +196,20 @@ Every tag is overridable from YAML: `vasp.incar` / `vasp.kpoints` are merged ont
 KPOINTS defaults, and `cp2k.input` is **deep-merged** onto the CP2K section tree — a `null`
 value drops a tag, a new key adds one, so you can both adjust our settings and add your own.
 
+With `dft.slurm: true` the run also drops a ready-to-edit **SLURM array** script per package
+at the output root (`submit_dft_vasp.sbatch` / `submit_dft_cp2k.sbatch`, with a matching
+`dft_<pkg>_jobs.txt`). The array size and per-task input directory are wired in automatically;
+the `#SBATCH` resources, module loads and the exact binary are left as `# EDIT` placeholders
+(default launch is `srun vasp_std` / `srun cp2k.psmp -i <project>.inp`). Submit with
+`sbatch submit_dft_vasp.sbatch` once you've assembled the POTCARs. (For a sharded sweep the
+script is written by the `--pool-only` reduce step, like the pooled statistics.)
+
 The same generator runs standalone on already-saved structures (no regeneration):
 
 ```bash
 auramaxxing-dft output/siral70                      # every structure.vasp under the dir
 auramaxxing-dft structure.vasp --package cp2k       # one file, CP2K only
+auramaxxing-dft output/siral70 --slurm              # also write the submit_dft_*.sbatch array script
 auramaxxing-dft output/siral70 --config examples/config/siral70.yaml   # apply the dft: overrides
 ```
 
