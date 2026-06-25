@@ -1,7 +1,7 @@
 from functools import lru_cache
 
 from base.amorphous_structure import AmorphousStruc, Limits
-from default_constants import d_min_max
+from default_constants import d_min_max, pair_cutoffs
 import numpy as np
 from scipy.spatial import cKDTree
 from scipy.ndimage import gaussian_filter
@@ -256,6 +256,56 @@ def place_atom_force(
 
     chosen_pos = candidates[chosen_idx]
     
+    amorphous_struct.commit_atom(atom_type, position=chosen_pos)
+    return True
+
+
+def place_atom_terminal(
+        amorphous_struct: AmorphousStruc,
+        atom_type: str,
+        idx_anchor: int,
+        bond_length: float,
+        num_samples: int = 100,
+    ) -> bool:
+    """Place a terminal cap (``atom_type``) on ``idx_anchor`` at ``bond_length``, choosing a
+    position that bonds ONLY to the anchor when one exists -- so a forced cap never
+    over-coordinates unrelated ("bystander") atoms. If no bystander-free spot exists, the
+    position with the fewest bystander bonds is used. Always commits (returns ``True``), so a
+    saturation/charge cap is guaranteed.
+
+    The anchor itself may still be over-coordinated by the cap (that is the caller's intent in
+    ``correct_charge``); only over-coordination of *other* atoms is what this avoids. Assumes
+    an orthogonal cell.
+    """
+    anchor_pos = amorphous_struct.atoms.positions[idx_anchor]
+    cell_dims = amorphous_struct.atoms.cell.cellpar()[:3]
+    candidates = (anchor_pos + (fibonacci_sphere(num_samples) * bond_length)) % cell_dims
+
+    symbols = np.array(amorphous_struct.atoms.get_chemical_symbols())
+    positions = amorphous_struct.atoms.positions % cell_dims
+    anchor_symbol = symbols[idx_anchor]
+
+    # Count, per candidate, how many atoms OTHER than the anchor lie within their bonding
+    # cutoff -- i.e. how many bystanders the cap would bond to (and thus over-coordinate).
+    bystander_bonds = np.zeros(len(candidates), dtype=int)
+    for element in np.unique(symbols):
+        cutoff = pair_cutoffs.get((atom_type, element))
+        if cutoff is None:
+            continue
+        idx_global = np.where(symbols == element)[0]
+        tree = cKDTree(positions[idx_global], boxsize=cell_dims)
+        hits = tree.query_ball_point(candidates, r=cutoff)
+        anchor_local = int(np.searchsorted(idx_global, idx_anchor)) if element == anchor_symbol else None
+        for i, hit in enumerate(hits):
+            if anchor_local is not None:
+                bystander_bonds[i] += sum(1 for h in hit if h != anchor_local)
+            else:
+                bystander_bonds[i] += len(hit)
+
+    # Prefer a candidate that bonds only the anchor (zero bystanders); else the fewest.
+    best = np.where(bystander_bonds == bystander_bonds.min())[0]
+    chosen_pos = candidates[amorphous_struct.rng.choice(best)]
+
     amorphous_struct.commit_atom(atom_type, position=chosen_pos)
     return True
 

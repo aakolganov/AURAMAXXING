@@ -11,7 +11,7 @@ from default_constants import (
     El_O_BONDLENGTH,
     O_H_BONDLENGTH,
 )
-from helpers.atom_placing import place_atom_sphere, place_atom_force
+from helpers.atom_placing import place_atom_sphere, place_atom_force, place_atom_terminal
 
 # Bond lengths used when attaching saturation groups: O onto an under-coordinated
 # Si/Al (El_O_BONDLENGTH ~ 1.63 A) and H onto an O (O_H_BONDLENGTH ~ 0.98 A).
@@ -268,13 +268,17 @@ def correct_charge(
             alpha=move_alpha,
             )
 
+        # Cap with a bystander-aware placement: the cap bonds only its intended attach atom
+        # where possible, so a forced placement can't over-coordinate unrelated atoms (M2).
+        # (The attach atom itself may still gain a bond beyond its max -- the move above was
+        # meant to free a slot but is left as a no-op, so this only guards the bystanders.)
         attach_idx = idx_furthest
         if current_charge > 0:
-            _try_then_force_place(amorphous_struct, "O", attach_idx,
-                                  num_samples=num_samples, bond_lengths=bond_lengths)
+            place_atom_terminal(amorphous_struct, "O", attach_idx,
+                                bond_length=bond_lengths["O"], num_samples=num_samples)
             attach_idx = len(amorphous_struct) - 1
-        _try_then_force_place(amorphous_struct, "H", attach_idx,
-                              num_samples=num_samples, bond_lengths=bond_lengths)
+        place_atom_terminal(amorphous_struct, "H", attach_idx,
+                            bond_length=bond_lengths["H"], num_samples=num_samples)
         # Drop any atom the move orphaned that the re-cap above failed to bond, so it can't
         # dangle in the output or crash a later iteration's move selection.
         removed = _prune_orphans_from_move(amorphous_struct, cn_before, n_before)

@@ -143,3 +143,26 @@ def test_policy_growth_reproducible(dummy_calc, tmp_path):
     assert sym1 == sym2
     assert np.allclose(pos1, pos2)
     assert np.array_equal(tag1, tag2)
+
+
+# --- M2: a terminal cap must not over-coordinate a bystander atom ------------------------
+# correct_charge force-places caps; place_atom_terminal must pick a spot that bonds ONLY the
+# intended anchor, so the cap can't bond (and over-coordinate) an unrelated neighbour.
+
+def test_place_atom_terminal_avoids_bystander_overcoordination(make_struct):
+    from helpers.atom_placing import place_atom_terminal
+
+    # Si anchor with a bystander O already bonded nearby. Capping the Si with another O must put
+    # the new O where it bonds ONLY to Si -- never to the bystander O (an O-O contact would be a
+    # defect that over-coordinates the bystander).
+    s = make_struct(["Si", "O"], [[10, 10, 10], [11.5, 10, 10]], cell=(20.0, 20.0, 20.0))
+    assert s.get_cn().tolist() == [1, 1]              # Si-O bonded
+
+    place_atom_terminal(s, "O", idx_anchor=0, bond_length=1.63, num_samples=200)
+
+    s.get_graph(force_rebuild=True)
+    cn = s.get_cn()
+    assert len(s) == 3
+    assert cn[0] == 2          # Si gained the cap (now bonded to both O)
+    assert cn[2] == 1          # the new cap-O bonds ONLY Si
+    assert cn[1] == 1          # the bystander O is NOT over-coordinated by the cap
