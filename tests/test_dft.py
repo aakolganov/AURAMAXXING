@@ -1,7 +1,7 @@
-"""Tests for the DFT-refinement input writers (dft/).
+"""Tests for the DFT-refinement input generator (dft/, pipeline step 3).
 
 Pure file-writing: no VASP/CP2K binary and no MLIP calculator are needed. Structures come
-from the seeded ``make_struct`` fixture.
+from the seeded ``make_struct`` fixture; the end-to-end runner test uses the LJ dummy backend.
 """
 from types import SimpleNamespace
 
@@ -13,6 +13,8 @@ from dft.api import write_dft_inputs
 from dft.common import deep_merge
 from dft.cp2k import write_cp2k_inputs
 from dft.vasp import write_vasp_inputs
+from runner.config import load_config
+from runner.runner import run_from_config
 
 
 # Symbols span H, O, Al, Si so the ascending-Z ordering (H, O, Al, Si) is exercised.
@@ -149,3 +151,30 @@ def test_write_dft_inputs_writes_selected_packages(make_struct, tmp_path):
     write_dft_inputs(s.atoms, spec, tmp_path / "dft")
     assert (tmp_path / "dft" / "cp2k" / "p.inp").exists()
     assert not (tmp_path / "dft" / "vasp").exists()         # vasp not requested
+
+
+# --- end-to-end through the runner -------------------------------------------------
+
+def _blank_cfg(tmp_path, dft):
+    return load_config({
+        "structure": {"cell": [16.0, 16.0, 30.0]},
+        "composition": {"target_ratios": {"Si": 1, "O": 2}, "target_number_atoms": 45},
+        "limits": {"bottom": {"type": "flat", "z": 10.0},
+                   "top": {"type": "fourier", "z_av": 18.0, "alpha": 1.0}, "fix": "bottom"},
+        "calculators": {"growth": {"type": "lammps"}},
+        "run": {"output_dir": str(tmp_path / "out"), "seeds": [0]},
+        "dft": dft,
+    })
+
+
+def test_run_from_config_writes_dft_inputs(tmp_path, monkeypatch):
+    from tests.dummy_interface import DummyInterface
+    monkeypatch.setattr("runner.runner.build_calculator",
+                        lambda spec: DummyInterface(dump_path=str(tmp_path / "dump")))
+    cfg = _blank_cfg(tmp_path, {"enabled": True, "packages": ["vasp", "cp2k"],
+                                "cp2k": {"project": "test"}})
+    run_from_config(cfg)
+    dft_dir = tmp_path / "out" / "dft"
+    assert (dft_dir / "vasp" / "INCAR").exists()
+    assert (dft_dir / "vasp" / "POSCAR").exists()
+    assert (dft_dir / "cp2k" / "test.inp").exists()

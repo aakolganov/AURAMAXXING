@@ -202,6 +202,12 @@ def _generate_one(cfg: RunConfig, seed: int, roughness: Optional[float],
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     struct.atoms.write(str(out_path), format=cfg.run.output_format)
+
+    # Step 3 (optional): write VASP/CP2K DFT-refinement inputs next to the structure. The
+    # writer Z-sorts a copy internally, so it is independent of the output above.
+    if cfg.dft.enabled:
+        from dft.api import write_dft_inputs
+        write_dft_inputs(struct.atoms, cfg.dft, out_path.parent / "dft")
     return struct
 
 
