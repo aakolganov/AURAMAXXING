@@ -106,6 +106,13 @@ def test_composition_all_cation_cannot_neutralize():
         _with_composition({"counts": {"Si": 2, "Al": 2}})
 
 
+def test_lammps_with_non_silica_composition_rejected_at_load():
+    d = _minimal()
+    d["composition"] = {"formula": "TiO2", "total_atoms": 96}   # growth calc is lammps
+    with pytest.raises(ValueError, match="BKS|lammps"):
+        load_config(d)
+
+
 def test_composition_multiple_forms_rejected():
     with pytest.raises(ValueError, match="exactly one"):
         _with_composition({"formula": "SiO2", "ratio": {"Si": 1, "O": 2}, "total_atoms": 99})
