@@ -142,6 +142,13 @@ def test_structure_requires_exactly_one_source():
         load_config(neither)
 
 
+def test_missing_from_file_raises_at_load():
+    d = _minimal()
+    d["structure"] = {"from_file": "/no/such/structure_file.vasp"}
+    with pytest.raises(FileNotFoundError, match="from_file"):
+        load_config(d)
+
+
 def test_fourier_limit_requires_alpha():
     d = _minimal()
     d["limits"]["top"] = {"type": "fourier", "z_av": 18.0}   # no alpha

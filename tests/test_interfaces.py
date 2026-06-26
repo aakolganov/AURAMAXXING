@@ -72,9 +72,23 @@ def test_lammps_calculator_cached_and_invalidated(make_struct, tmp_path):
     c2 = calc._init_lmp_calculator(s.atoms)
     assert c1 is c2  # cache hit
 
-    s.commit_atom("H", [6.6, 6.0, 5.0])  # atom count changes
+    s.commit_atom("O", [6.6, 6.0, 5.0])  # atom count changes (O is BKS-supported)
     c3 = calc._init_lmp_calculator(s.atoms)
     assert c3 is not c1  # cache invalidated
+
+
+def test_lammps_rejects_unsupported_elements(make_struct, tmp_path):
+    # BKS only parameterizes Si/Al/O; any other element (incl. the H that saturation adds)
+    # must raise a clear error rather than silently building a broken, non-neutral potential.
+    from interfaces.LAMMPS_Interface import LMPInterface
+
+    calc = LMPInterface(dump_path=str(tmp_path / "d"))
+    s_ti = make_struct(["Si", "O", "Ti"], [[5, 5, 5], [6.6, 5, 5], [8, 5, 5]], cell=(15.0, 15.0, 15.0))
+    with pytest.raises(ValueError, match="Ti"):
+        calc._init_lmp_calculator(s_ti.atoms)
+    s_h = make_struct(["Si", "O", "H"], [[5, 5, 5], [6.6, 5, 5], [7, 5, 5]], cell=(15.0, 15.0, 15.0))
+    with pytest.raises(ValueError, match="H"):
+        calc._init_lmp_calculator(s_h.atoms)
 
 
 @pytest.mark.lammps

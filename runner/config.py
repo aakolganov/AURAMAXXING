@@ -64,6 +64,9 @@ class StructureSpec:
         _check_keys(d, {"cell", "pbc", "from_file", "ase_read_kwargs"}, where)
         if bool(d.get("cell")) == bool(d.get("from_file")):
             raise ValueError(f"{where}: provide exactly one of 'cell' (blank box) or 'from_file'")
+        from_file = d.get("from_file")
+        if from_file is not None and not Path(from_file).exists():
+            raise FileNotFoundError(f"{where}.from_file: structure file not found: {from_file}")
         return cls(
             cell=d.get("cell"),
             pbc=d.get("pbc"),
