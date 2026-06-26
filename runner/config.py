@@ -11,13 +11,17 @@ distributions, formal charges) stays in ``default_constants.py``.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from itertools import product
 from pathlib import Path
 from typing import Optional, Union
 
 import yaml
+from ase.formula import Formula
 
 from base.config import CoordinationConfig
+from base.element_data import OXIDE_ELEMENTS, build_element_tables, element_record
 
 
 # --- validation helpers -------------------------------------------------------------
@@ -70,16 +74,164 @@ class StructureSpec:
 
 @dataclass
 class CompositionSpec:
-    target_ratios: dict
-    target_number_atoms: int
+    """Canonical, charge-neutral integer per-element target counts for growth.
 
-    @classmethod
-    def from_dict(cls, d: dict, where: str) -> "CompositionSpec":
-        d = _as_dict(d, where)
-        _check_keys(d, {"target_ratios", "target_number_atoms"}, where,
-                    required=("target_ratios", "target_number_atoms"))
-        return cls(target_ratios=dict(d["target_ratios"]),
-                   target_number_atoms=int(d["target_number_atoms"]))
+    Built from one input form (formula / elemental ratio / structural mix / explicit counts,
+    or the legacy target_ratios), then adjusted to the nearest charge-neutral integer
+    composition. ``target_ratios`` and ``target_number_atoms`` are exposed for the grow loop:
+    the integer counts are the relative weights the deficit picker converges to, and their
+    sum is the target size.
+    """
+    target_counts: dict
+    requested_counts: dict
+    adjusted: bool
+
+    @property
+    def target_number_atoms(self) -> int:
+        return sum(self.target_counts.values())
+
+    @property
+    def target_ratios(self) -> dict:
+        return dict(self.target_counts)
+
+
+# --- composition parsing ------------------------------------------------------------
+
+def _formula_counts(formula, where: str) -> dict:
+    """Element counts of a brutto formula (e.g. 'Al2O3' -> {Al: 2, O: 3}) via ase.formula."""
+    try:
+        counts = Formula(str(formula)).count()
+    except Exception as exc:
+        raise ValueError(f"{where}: could not parse formula {formula!r}: {exc}")
+    return {el: int(n) for el, n in counts.items()}
+
+
+def _parse_mix_string(s: str, where: str) -> list:
+    """Parse a structural-mix string: 'SiO2:Al2O3=7:1' or '70% SiO2 + 30% Al2O3'."""
+    s = s.strip()
+    if "=" in s:                                   # 'A:B=x:y'
+        comps, ratios = s.split("=", 1)
+        comp_list = [c.strip() for c in comps.split(":")]
+        ratio_list = [r.strip() for r in ratios.split(":")]
+        if len(comp_list) != len(ratio_list):
+            raise ValueError(f"{where}.mix: '{s}' has {len(comp_list)} components but "
+                             f"{len(ratio_list)} ratios")
+        return [(c, float(r)) for c, r in zip(comp_list, ratio_list)]
+    if "+" in s or "%" in s:                       # 'x% A + y% B'
+        items = []
+        for token in s.split("+"):
+            token = token.strip()
+            m = re.match(r"^([0-9]*\.?[0-9]+)\s*%?\s*(.+)$", token)
+            if not m:
+                raise ValueError(f"{where}.mix: could not parse component {token!r} in {s!r}")
+            items.append((m.group(2).strip(), float(m.group(1))))
+        return items
+    raise ValueError(f"{where}.mix: unrecognised mix {s!r}; use 'A:B=x:y', 'x% A + y% B', "
+                     f"or a mapping {{formula: weight}}")
+
+
+def _parse_mix(mix, where: str) -> dict:
+    """Expand a structural mix into element weights (sum of each component's formula counts
+    scaled by its weight)."""
+    if isinstance(mix, dict):
+        items = [(str(f), float(w)) for f, w in mix.items()]
+    elif isinstance(mix, str):
+        items = _parse_mix_string(mix, where)
+    else:
+        raise ValueError(f"{where}.mix: expected a mapping or a string, got {type(mix).__name__}")
+    weights: dict = {}
+    for formula, w in items:
+        for el, c in _formula_counts(formula, f"{where}.mix").items():
+            weights[el] = weights.get(el, 0.0) + w * c
+    return weights
+
+
+def _parse_composition_block(d: dict, where: str) -> dict:
+    """Parse a composition block into element weights (+ total) or explicit counts. Exactly
+    one of formula / ratio / mix / counts (or the legacy target_ratios) must be present."""
+    d = _as_dict(d, where)
+    _check_keys(d, {"formula", "ratio", "mix", "counts", "total_atoms",
+                    "target_ratios", "target_number_atoms"}, where)
+    forms = [k for k in ("formula", "ratio", "mix", "counts", "target_ratios") if k in d]
+    if len(forms) != 1:
+        raise ValueError(f"{where}: provide exactly one of 'formula', 'ratio', 'mix', "
+                         f"'counts' (or legacy 'target_ratios'); got {forms}")
+    form = forms[0]
+
+    if form == "counts":                           # explicit counts: no total needed
+        counts = {str(k): int(v) for k, v in _as_dict(d["counts"], f"{where}.counts").items()}
+        if any(v < 0 for v in counts.values()) or sum(counts.values()) == 0:
+            raise ValueError(f"{where}.counts: need positive integer atom counts")
+        return {"weights": None, "counts": counts, "total": None, "elements": set(counts)}
+
+    total_key = "target_number_atoms" if form == "target_ratios" else "total_atoms"
+    if total_key not in d:
+        raise ValueError(f"{where}: composition form {form!r} needs '{total_key}'")
+    total = int(d[total_key])
+    if total <= 0:
+        raise ValueError(f"{where}.{total_key}: must be a positive integer")
+
+    if form == "formula":
+        weights = {el: float(c) for el, c in _formula_counts(d["formula"], where).items()}
+    elif form in ("ratio", "target_ratios"):
+        weights = {str(k): float(v) for k, v in _as_dict(d[form], f"{where}.{form}").items()}
+    else:                                          # mix
+        weights = _parse_mix(d["mix"], where)
+
+    if not weights or sum(weights.values()) <= 0:
+        raise ValueError(f"{where}: composition has no positive element weights")
+    return {"weights": weights, "counts": None, "total": total, "elements": set(weights)}
+
+
+def _nearest_neutral_counts(x: dict, oxidation: dict, where: str):
+    """Integer per-element counts closest (least-squares) to the targets ``x`` whose net
+    formal charge is zero. Brute-forces the small integer neighbourhood of round(x); exact for
+    the handful of species in an oxide composition. Returns (counts, requested, adjusted)."""
+    elems = list(x)
+    ox = [oxidation[e] for e in elems]
+    n0 = [max(0, int(round(x[e]))) for e in elems]
+
+    def search(kmax):
+        best = None
+        for deltas in product(range(-kmax, kmax + 1), repeat=len(elems)):
+            n = [n0[i] + deltas[i] for i in range(len(elems))]
+            if any(c < 0 for c in n) or sum(n) == 0:
+                continue
+            if sum(n[i] * ox[i] for i in range(len(elems))) != 0:
+                continue
+            cost = sum((n[i] - x[elems[i]]) ** 2 for i in range(len(elems)))
+            key = (cost, sum(abs(dd) for dd in deltas))
+            if best is None or key < best[0]:
+                best = (key, n)
+        return best
+
+    best = None
+    for kmax in (4, 8, 16):
+        best = search(kmax)
+        if best is not None:
+            break
+    if best is None:
+        raise ValueError(
+            f"{where}: cannot reach a charge-neutral integer composition for "
+            f"{dict(zip(elems, ox))}; it must contain both cations (oxidation > 0) and "
+            f"anions (oxidation < 0).")
+    counts = {e: c for e, c in zip(elems, best[1])}
+    requested = {e: c for e, c in zip(elems, n0)}
+    return counts, requested, (best[1] != n0)
+
+
+def _finalize_composition(parsed: dict, oxidation: dict, where: str) -> CompositionSpec:
+    if parsed["counts"] is not None:
+        x = {e: float(c) for e, c in parsed["counts"].items()}
+    else:
+        weights = parsed["weights"]
+        tot_w = sum(weights.values())
+        x = {e: weights[e] / tot_w * parsed["total"] for e in weights}
+    counts, requested, adjusted = _nearest_neutral_counts(x, oxidation, where)
+    if adjusted:
+        print(f"[composition] adjusted to the nearest charge-neutral integer counts: "
+              f"{requested} -> {counts} (net formal charge 0)")
+    return CompositionSpec(target_counts=counts, requested_counts=requested, adjusted=adjusted)
 
 
 @dataclass
@@ -306,21 +458,88 @@ def _parse_cut_offs(raw: dict, where: str) -> dict:
     return out
 
 
-def _build_coordination(d: Optional[dict], where: str) -> CoordinationConfig:
-    """Merge a partial coordination block onto the constant defaults."""
-    cfg = CoordinationConfig()   # fresh copies of the defaults
-    if not d:
-        return cfg
-    d = _as_dict(d, where)
-    _check_keys(d, {"max_cn", "min_cn", "cut_offs", "overcoord_policy"}, where)
-    if "max_cn" in d:
-        cfg.max_cn.update({k: int(v) for k, v in _as_dict(d["max_cn"], f"{where}.max_cn").items()})
-    if "min_cn" in d:
-        cfg.min_cn.update({k: int(v) for k, v in _as_dict(d["min_cn"], f"{where}.min_cn").items()})
-    if "cut_offs" in d:
-        cfg.cut_offs.update(_parse_cut_offs(d["cut_offs"], f"{where}.cut_offs"))
-    if "overcoord_policy" in d:
+def _coord_override_elements(coord_block: Optional[dict]) -> set:
+    """Element symbols named anywhere in a coordination block, so the derived tables include
+    them even when they are absent from the composition (e.g. a max_cn override for Al)."""
+    if not coord_block:
+        return set()
+    elems: set = set()
+    for key in ("max_cn", "min_cn", "oxidation", "overcoord_policy"):
+        sub = coord_block.get(key)
+        if isinstance(sub, dict):
+            elems.update(str(k) for k in sub)
+    cut = coord_block.get("cut_offs")
+    if isinstance(cut, dict):
+        for pair in cut:
+            elems.update(str(pair).split("-"))
+    return elems
+
+
+def _resolve_oxidation(elements, coord_block: Optional[dict], where: str) -> dict:
+    """Per-element signed oxidation state: curated default, overridden by the coordination
+    block. Raises the clear missing-element error for a non-curated, non-overridden element."""
+    over = {}
+    if coord_block and "oxidation" in coord_block:
+        over = {str(k): int(v)
+                for k, v in _as_dict(coord_block["oxidation"], f"{where}.oxidation").items()}
+    oxidation = {}
+    for e in elements:
+        if e in over:
+            oxidation[e] = over[e]
+        elif e in OXIDE_ELEMENTS:
+            oxidation[e] = OXIDE_ELEMENTS[e]["oxidation"]
+        else:
+            element_record(e)   # raises the clear missing-element error
+    return oxidation
+
+
+def _parse_distance_knobs(raw, where: str) -> dict:
+    d = _as_dict(raw, where)
+    _check_keys(d, {"bond_factor", "bond_dev", "cutoff_pad", "collision_factor"}, where)
+    return {k: float(v) for k, v in d.items()}
+
+
+def _validate_cutoff_overrides(overrides: dict, cfg: CoordinationConfig, where: str) -> None:
+    """A raw cut_off override must not fall below the derived bond-sampling upper bound for the
+    pair, or a sampled bond could be committed yet scored as non-bonded (the coherence bug).
+    Pairs whose elements are not in the derived set are left to the user."""
+    for (a, b), val in overrides.items():
+        rs = cfg.sample_dist.get(a)
+        if rs is None or b not in rs:
+            continue
+        hi = float(dict.__getitem__(rs, b).support()[1])
+        if val < hi:
+            raise ValueError(
+                f"{where}: cut_off {a}-{b}={val} is below the derived bond-sampling upper "
+                f"bound {hi:.3f}; a sampled bond could then be scored as non-bonded. Raise the "
+                f"cut_off, or use a 'distance' override to move the whole window.")
+
+
+def _build_coordination(d: Optional[dict], where: str, *, elements, oxidation) -> CoordinationConfig:
+    """Derive the covalent-radii distance tables + curated coordination defaults for the run's
+    element set, then apply the partial user overrides (same merge convention as before)."""
+    d = _as_dict(d, where) if d is not None else None
+    if d is not None:
+        _check_keys(d, {"max_cn", "min_cn", "cut_offs", "overcoord_policy", "oxidation", "distance"}, where)
+    distance_knobs = _parse_distance_knobs(d["distance"], f"{where}.distance") if d and "distance" in d else None
+    max_cn_over = ({str(k): int(v) for k, v in _as_dict(d["max_cn"], f"{where}.max_cn").items()}
+                   if d and "max_cn" in d else {})
+    min_cn_over = ({str(k): int(v) for k, v in _as_dict(d["min_cn"], f"{where}.min_cn").items()}
+                   if d and "min_cn" in d else {})
+
+    tables = build_element_tables(elements, distance_knobs=distance_knobs,
+                                  oxidation=oxidation, max_cn=max_cn_over, min_cn=min_cn_over)
+    cfg = CoordinationConfig(
+        max_cn=tables["max_cn"], min_cn=tables["min_cn"], cut_offs=tables["cut_offs"],
+        sample_dist=tables["sample_dist"], d_min_max=tables["d_min_max"],
+        oxidation=tables["oxidation"],
+    )
+    if d and "overcoord_policy" in d:
         cfg.overcoord_policy.update(_as_dict(d["overcoord_policy"], f"{where}.overcoord_policy"))
+    if d and "cut_offs" in d:
+        overrides = _parse_cut_offs(d["cut_offs"], f"{where}.cut_offs")
+        _validate_cutoff_overrides(overrides, cfg, f"{where}.cut_offs")
+        cfg.cut_offs.update(overrides)
     return cfg
 
 
@@ -356,12 +575,24 @@ class RunConfig:
         rules = d.get("rules", []) or []
         if not isinstance(rules, list):
             raise ValueError("config.rules: expected a list of rule mappings")
+
+        # Composition and coordination are interdependent: parse the composition to learn the
+        # element set, resolve oxidation (curated + overrides), neutralise the integer counts,
+        # then derive the per-pair distance / coordination tables for that element set.
+        comp_parsed = _parse_composition_block(d["composition"], "composition")
+        coord_block = _as_dict(d["coordination"], "coordination") if d.get("coordination") is not None else None
+        elements = sorted(comp_parsed["elements"] | {"O", "H"} | _coord_override_elements(coord_block))
+        oxidation = _resolve_oxidation(elements, coord_block, "coordination")
+        composition = _finalize_composition(comp_parsed, oxidation, "composition")
+        coordination = _build_coordination(coord_block, "coordination",
+                                           elements=elements, oxidation=oxidation)
+
         return cls(
             structure=StructureSpec.from_dict(d["structure"], "structure"),
-            composition=CompositionSpec.from_dict(d["composition"], "composition"),
+            composition=composition,
             limits=LimitsSpec.from_dict(d["limits"], "limits"),
             calculators=CalculatorsSpec.from_dict(d["calculators"], "calculators"),
-            coordination=_build_coordination(d.get("coordination"), "coordination"),
+            coordination=coordination,
             growth=GrowthSpec.from_dict(d.get("growth", {}), "growth"),
             finalize=FinalizeSpec.from_dict(d.get("finalize", {}), "finalize"),
             saturation=SaturationSpec.from_dict(d.get("saturation", {}), "saturation"),
