@@ -161,31 +161,46 @@ def derive_pair_distances(
     return sample_dist, d_min_max, pair_cutoffs
 
 
-def build_element_tables(elements, *, distance_knobs: dict | None = None) -> dict:
-    """Assemble the per-element and per-pair default tables for ``elements``.
+def build_element_tables(
+        elements,
+        *,
+        distance_knobs: dict | None = None,
+        oxidation: dict | None = None,
+        max_cn: dict | None = None,
+        min_cn: dict | None = None,
+    ) -> dict:
+    """Assemble the per-element and per-pair tables for ``elements``.
 
-    Returns a dict with keys ``oxidation``, ``max_cn``, ``min_cn`` (per-element, from the
-    curated table) and ``sample_dist``, ``d_min_max``, ``cut_offs`` (per-pair, from the
-    covalent-radii derivation). User overrides are applied by the caller (the config layer),
-    mirroring the existing partial-merge-onto-defaults convention.
+    Returns a dict with keys ``oxidation``, ``max_cn``, ``min_cn`` (per-element) and
+    ``sample_dist``, ``d_min_max``, ``cut_offs`` (per-pair, from the covalent-radii
+    derivation). Per-element values come from the curated table, with the optional
+    ``oxidation``/``max_cn``/``min_cn`` override dicts taking precedence. An element absent
+    from the curated table is allowed only if fully specified by the overrides; otherwise the
+    clear missing-element error is raised.
     """
     elements = list(dict.fromkeys(elements))
     knobs = {**DEFAULT_DISTANCE_KNOBS, **(distance_knobs or {})}
+    oxidation = oxidation or {}
+    max_cn = max_cn or {}
+    min_cn = min_cn or {}
 
-    oxidation: dict = {}
-    max_cn: dict = {}
-    min_cn: dict = {}
+    out_ox: dict = {}
+    out_max: dict = {}
+    out_min: dict = {}
     for e in elements:
-        rec = element_record(e)
-        oxidation[e] = rec["oxidation"]
-        max_cn[e] = rec["max_cn"]
-        min_cn[e] = rec["min_cn"]
+        rec = OXIDE_ELEMENTS.get(e)
+        if rec is None and not (e in oxidation and e in max_cn and e in min_cn):
+            element_record(e)   # not curated and not fully overridden -> clear error
+        rec = rec or {}
+        out_ox[e] = oxidation.get(e, rec.get("oxidation"))
+        out_max[e] = max_cn.get(e, rec.get("max_cn"))
+        out_min[e] = min_cn.get(e, rec.get("min_cn"))
 
     sample_dist, d_min_max, cut_offs = derive_pair_distances(elements, **knobs)
     return {
-        "oxidation": oxidation,
-        "max_cn": max_cn,
-        "min_cn": min_cn,
+        "oxidation": out_ox,
+        "max_cn": out_max,
+        "min_cn": out_min,
         "sample_dist": sample_dist,
         "d_min_max": d_min_max,
         "cut_offs": cut_offs,
