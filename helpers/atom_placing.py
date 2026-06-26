@@ -1,7 +1,6 @@
 from functools import lru_cache
 
 from base.amorphous_structure import AmorphousStruc, Limits
-from default_constants import d_min_max, pair_cutoffs
 import numpy as np
 from scipy.spatial import cKDTree
 from scipy.ndimage import gaussian_filter
@@ -105,6 +104,7 @@ def place_atom_sphere(
     # 3. Spatial collision checks against the cached per-element trees
     anchor_symbol = amorphous_struct.atoms[idx_anchor].symbol
     is_valid = np.ones(len(candidates), dtype=bool)
+    d_min_max = amorphous_struct.d_min_max
 
     for element, (tree, idx_global) in trees.items():
 
@@ -208,6 +208,7 @@ def place_atom_force(
 
     symbols = np.array(amorphous_struct.atoms.get_chemical_symbols())
     positions = amorphous_struct.atoms.positions
+    d_min_max = amorphous_struct.d_min_max
 
     # Track the minimum margin for each candidate.
     # Margin = distance_to_nearest_obstacle - exclusion_radius.
@@ -288,8 +289,11 @@ def place_atom_terminal(
     # Count, per candidate, how many atoms OTHER than the anchor lie within their bonding
     # cutoff -- i.e. how many bystanders the cap would bond to (and thus over-coordinate).
     bystander_bonds = np.zeros(len(candidates), dtype=int)
+    pair_cutoffs = amorphous_struct.cut_offs
     for element in np.unique(symbols):
         cutoff = pair_cutoffs.get((atom_type, element))
+        if cutoff is None:
+            cutoff = pair_cutoffs.get((element, atom_type))
         if cutoff is None:
             continue
         idx_global = np.where(symbols == element)[0]

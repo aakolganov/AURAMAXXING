@@ -17,7 +17,8 @@ from helpers.atom_picker import choose_atom_idx_to_attach_to
 def _config_for(elements):
     t = build_element_tables(elements)
     return CoordinationConfig(max_cn=t["max_cn"], min_cn=t["min_cn"],
-                              cut_offs=t["cut_offs"], oxidation=t["oxidation"])
+                              cut_offs=t["cut_offs"], oxidation=t["oxidation"],
+                              sample_dist=t["sample_dist"], d_min_max=t["d_min_max"])
 
 
 def _struct(symbols, positions, elements, cell=(20.0, 20.0, 20.0), seed=42):
@@ -50,3 +51,29 @@ def test_attachment_uses_oxidation_sign_for_non_legacy_element():
     assert s.get_cn(0) == 1 and s.get_cn(1) == 1     # they are bonded
     assert s.symbols[choose_atom_idx_to_attach_to(s, "O", weight_z=False)] == "Ti"
     assert s.symbols[choose_atom_idx_to_attach_to(s, "Ti", weight_z=False)] == "O"
+
+
+def test_grow_titania_with_covalent_distances(dummy_calc, tmp_path):
+    # End-to-end smoke test: grow a small TiO2 slab through the covalent-radii distance
+    # tables (no Si/Al/O legacy data involved) with the soft dummy calculator.
+    from base.initialize import initialize_structure_blank
+    from base.limits import make_limit_flat, fix_limits
+    from growth.new_growth import grow_structure
+
+    s = initialize_structure_blank(cell=[20.0, 20.0, 25.0], config=_config_for(["Ti", "O"]))
+    s.set_seed(7)
+    make_limit_flat(s, z_val=5.0, is_for="bottom")
+    make_limit_flat(s, z_val=20.0, is_for="top")
+    fix_limits(s.limits, hard_limit="bottom")
+
+    grow_structure(s, target_number_atoms=18, target_ratios={"Ti": 1, "O": 2},
+                   calculator=dummy_calc, output_dir=tmp_path / "g")
+
+    assert len(s) == 18
+    o_frac = s.symbols.count("O") / len(s)
+    assert 0.5 < o_frac < 0.8                                   # tracks the 1:2 Ti:O target
+    dm = s.atoms.get_all_distances(mic=True)
+    np.fill_diagonal(dm, np.inf)
+    assert dm.min() > 1.0                                       # no hard steric clashes
+    pos = s.atoms.get_positions()
+    assert np.all(pos >= 0.0) and np.all(pos < np.array([20.0, 20.0, 25.0]))
