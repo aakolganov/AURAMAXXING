@@ -546,6 +546,26 @@ def _build_coordination(d: Optional[dict], where: str, *, elements, oxidation) -
     return cfg
 
 
+# --- calculator/composition cross-check ---------------------------------------------
+
+_BKS_SUPPORTED = {"Si", "Al", "O"}
+
+
+def _check_bks_supported(calculators: CalculatorsSpec, comp_elements: set, where: str) -> None:
+    """Fail fast at config load (so --dry-run catches it) when a lammps/BKS calculator is
+    paired with a composition outside Si/Al/O. The LAMMPS interface guards this at build time
+    too -- and also catches the H that saturation adds -- but catching the composition case
+    here gives an immediate, clear error."""
+    uses_lammps = any(c is not None and c.type == "lammps"
+                      for c in (calculators.growth, calculators.saturation))
+    unsupported = comp_elements - _BKS_SUPPORTED
+    if uses_lammps and unsupported:
+        raise ValueError(
+            f"{where}: the lammps/BKS backend supports only {sorted(_BKS_SUPPORTED)} "
+            f"(silica-aluminas), but the composition contains {sorted(unsupported)}. "
+            f"Use a 'mace' or 'uma' calculator for this composition.")
+
+
 # --- top-level config ---------------------------------------------------------------
 
 @dataclass
@@ -590,11 +610,14 @@ class RunConfig:
         coordination = _build_coordination(coord_block, "coordination",
                                            elements=elements, oxidation=oxidation)
 
+        calculators = CalculatorsSpec.from_dict(d["calculators"], "calculators")
+        _check_bks_supported(calculators, set(composition.target_counts), "calculators")
+
         return cls(
             structure=StructureSpec.from_dict(d["structure"], "structure"),
             composition=composition,
             limits=LimitsSpec.from_dict(d["limits"], "limits"),
-            calculators=CalculatorsSpec.from_dict(d["calculators"], "calculators"),
+            calculators=calculators,
             coordination=coordination,
             growth=GrowthSpec.from_dict(d.get("growth", {}), "growth"),
             finalize=FinalizeSpec.from_dict(d.get("finalize", {}), "finalize"),
