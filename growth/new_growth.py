@@ -73,6 +73,10 @@ def grow_structure(
             excluded_idx = []
             while current_iter <= per_anchor_attempts and not placement_success:
                 current_iter += 1
+                # No valid opposite-class anchor left (all excluded / none exist): stop trying
+                # anchors and fall through to the melt-quench that relieves the jam.
+                if idx_connect_to < 0:
+                    break
                 bond_length = sample_dist[amorphous_struct.atoms[idx_connect_to].symbol][atom_to_add]
                 placement_success = place_atom_sphere(
                     amorphous_struct,

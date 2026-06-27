@@ -7,6 +7,11 @@ from scipy.stats import burr12, uniform
 OXIDATION_POS = {"Si": +4, "Al": +3, "H": +1}
 OXIDATION_NEG = {"O": -2}
 
+# Merged signed oxidation table (sign defines cation vs anion). Default for
+# AmorphousStruc.charge() and the growth cation/anion attachment rule; a run with other
+# elements overrides this via the config/element_data derivation.
+default_oxidation = {**OXIDATION_NEG, **OXIDATION_POS}
+
 
 # object to randomly select the distances
 sample_dist: Dict[str, RandomSample[str, Callable]] = {

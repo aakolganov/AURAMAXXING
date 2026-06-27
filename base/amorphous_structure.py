@@ -11,8 +11,7 @@ from collections import Counter
 from default_constants import (
     default_max_cn,
     pair_cutoffs,
-    OXIDATION_POS,
-    OXIDATION_NEG,
+    default_oxidation,
     default_min_cn,
     default_overcoord_policy,
 )
@@ -26,6 +25,7 @@ class AmorphousStruc:
     min_cn: dict = field(default_factory=default_min_cn.copy)
     cut_offs: dict = field(default_factory=pair_cutoffs.copy)
     overcoord_policy: dict = field(default_factory=default_overcoord_policy.copy)
+    oxidation: dict = field(default_factory=default_oxidation.copy)
     rng: np.random.Generator = field(default_factory=np.random.default_rng)
     limits: Limits = field(default=None, init=False, repr=False)
     
@@ -280,14 +280,21 @@ class AmorphousStruc:
 
 
     def charge(self, defined_charges: Optional[dict[str, int]] = None) -> int:
-        if defined_charges is None:
-            defined_charges = {}
-            [defined_charges.update(d) for d in [OXIDATION_NEG, OXIDATION_POS]]
+        """Net formal charge from the per-element oxidation table (``self.oxidation`` by
+        default, or an explicit ``defined_charges`` override). Raises a clear error, naming
+        the element, when an element present in the structure has no oxidation state."""
+        table = self.oxidation if defined_charges is None else defined_charges
         atom_counts = Counter(self.atoms.get_chemical_symbols())
-        
+
         net_charge = 0
         for at, count in atom_counts.items():
-            net_charge += count * defined_charges[at]
+            try:
+                net_charge += count * table[at]
+            except KeyError:
+                raise ValueError(
+                    f"charge(): no oxidation state for element {at!r}; add it to the "
+                    f"structure's oxidation table (or the curated base/element_data table)."
+                ) from None
         return net_charge
 
 
@@ -357,6 +364,7 @@ def AmorphousStruc_factory(
             min_cn=config.min_cn.copy(),
             cut_offs=config.cut_offs.copy(),
             overcoord_policy=config.overcoord_policy.copy(),
+            oxidation=config.oxidation.copy(),
         )
 
     return AmorphousStruc(atoms=atoms_obj, rng=rng, **kwargs)

@@ -12,6 +12,7 @@ from default_constants import (
     default_min_cn,
     pair_cutoffs,
     default_overcoord_policy,
+    default_oxidation,
 )
 
 
@@ -28,8 +29,12 @@ class CoordinationConfig:
     overcoord_policy : dict
         Per-element overcoordination policy, e.g. ``{"Al": {"max_cn": 6,
         "fraction": 0.2}}``. ``{}`` (default) disables the feature.
+    oxidation : dict
+        Per-element signed oxidation state (sign defines cation vs anion). Used by
+        ``charge()`` and the growth attachment rule.
     """
     max_cn: dict = field(default_factory=default_max_cn.copy)
     min_cn: dict = field(default_factory=default_min_cn.copy)
     cut_offs: dict = field(default_factory=pair_cutoffs.copy)
     overcoord_policy: dict = field(default_factory=default_overcoord_policy.copy)
+    oxidation: dict = field(default_factory=default_oxidation.copy)

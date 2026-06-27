@@ -1,4 +1,3 @@
-from default_constants import OXIDATION_POS, OXIDATION_NEG
 import numpy as np
 from base import AmorphousStruc
 from typing import Optional
@@ -12,8 +11,13 @@ def choose_atom_idx_to_attach_to(amorphous_struct: AmorphousStruc, atom_type: st
     if all_cn is None:
         all_cn = amorphous_struct.get_cn()
 
-    # Determine which atom types are valid to attach to
-    allowed_attachment_atoms = OXIDATION_NEG.keys() if atom_type in OXIDATION_POS else OXIDATION_POS.keys()
+    # Determine which atom types are valid to attach to: the opposite oxidation-state sign
+    # (cations attach to anions and vice versa), read from the structure's oxidation table.
+    ox = amorphous_struct.oxidation
+    if atom_type not in ox:
+        raise ValueError(f"choose_atom_idx_to_attach_to: no oxidation state for {atom_type!r}")
+    adding_is_cation = ox[atom_type] > 0
+    allowed_attachment_atoms = [el for el, q in ox.items() if (q > 0) != adding_is_cation]
 
     # Build a mask of saturated atoms. max_cn_array() is per-atom: it honours any
     # overcoordination overrides (e.g. an Al allowed CN 6) and falls back to the
@@ -26,14 +30,18 @@ def choose_atom_idx_to_attach_to(amorphous_struct: AmorphousStruc, atom_type: st
     if exclude_indices is not None:
         cand = np.setdiff1d(cand, exclude_indices)
 
-    # if none left, pick uniformly at random from all atoms
     if cand.size == 0:
+        # No unsaturated opposite-class anchor. Fall back to ANY opposite-class atom (even a
+        # saturated one) so we never bond to a same-class anchor -- whose bond-length sampler
+        # / cutoff would score the placement as non-bonded (committing a floating atom). If no
+        # opposite-class atom exists at all, signal failure (-1) so the growth loop relieves
+        # the jam by melt-quenching instead of committing a spurious bond.
+        pool = np.where(np.isin(symbols, list(allowed_attachment_atoms)))[0]
         if exclude_indices is not None:
-            all_indices = np.arange(len(amorphous_struct))
-            fallback_cand = np.setdiff1d(all_indices, exclude_indices)
-            if fallback_cand.size > 0:
-                return int(amorphous_struct.rng.choice(fallback_cand))
-        return int(amorphous_struct.rng.integers(len(amorphous_struct)))
+            pool = np.setdiff1d(pool, exclude_indices)
+        if pool.size == 0:
+            return -1
+        return int(amorphous_struct.rng.choice(pool))
     
     # 4) group by coordination number
     cand_cns = all_cn[cand]
