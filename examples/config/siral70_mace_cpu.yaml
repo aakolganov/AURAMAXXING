@@ -26,8 +26,8 @@ limits:
   fix: bottom
 
 coordination:
-  overcoord_policy:
-    Al: {max_cn: 6, fraction: 0.2}
+  cn_distr:
+    Al: {6: 0.2}            # ~20% of Al grown at CN 6, the rest at the default CN 4
 
 calculators:
   growth:     {type: lammps, dump_path: dump_lmp}

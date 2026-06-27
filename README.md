@@ -128,13 +128,16 @@ coordination:               # optional; partial overrides merge onto the derived
   distance: {bond_factor: 1.0, bond_dev: 0.15, cutoff_pad: 0.25, collision_factor: 0.75}
                                            # covalent-radii distance-model knobs (all optional)
   cut_offs: {Si-O: 1.95}                   # raw "El-El" cutoff override (must stay >= window upper)
-  overcoord_policy:                        # grow a random fraction of an element as a variant
-    Al: {max_cn: 6, fraction: 0.2}         # ~20% of Al may reach CN 6, rest cap at 4
-    Si: {max_cn: 3, oxidation: 3, fraction: 0.1}  # ~10% of Si as a 3+ / CN-3 site (the same
-                                           # tagged atoms get both the alt CN and oxidation).
-                                           # NB: the charge-neutral target uses per-element
-                                           # oxidation; fractional-oxidation variants shift the
-                                           # realised charge slightly (settled by saturation).
+  cn_distr:                                # expected coordination-number distribution per element
+    Si: 4                                  # a single CN -> all Si are CN 4 (the only expected CN)
+    Al: {4: 0.8, 6: 0.2}                   # 80% of Al at CN 4, 20% at CN 6
+    Fe:                                    # list form carries a per-variant oxidation state
+      - {cn: 6, fraction: 0.9}             # 90% Fe at CN 6 (default oxidation)
+      - {cn: 4, fraction: 0.1, oxidation: 2}  # 10% as a 2+ / CN-4 site (same atoms get both)
+    # A CN sets the atom's max coordination; the optional per-variant oxidation overrides the
+    # element default for that fraction; any remainder (fractions sum < 1) falls back to the
+    # curated default CN. NB: the charge-neutral target uses per-element oxidation, so
+    # fractional-oxidation variants shift the realised charge slightly (settled by saturation).
 
 calculators:                # type: lammps | mace | uma; extra keys are backend kwargs
   # NB: the lammps/BKS backend is a lightweight generator for silica(-aluminas) only -- it
@@ -279,10 +282,10 @@ from base.config import CoordinationConfig
 from base.limits import make_limit_flat, make_limits_fourier, fix_limits
 from growth.new_growth import grow_structure, finalize_structure
 from interfaces.LAMMPS_Interface import LMPInterface
-from default_constants import SIRAL_OVERCOORD       # {"Al": {"max_cn": 6, "fraction": 0.2}}
+from default_constants import SIRAL_CN_DISTR        # {"Al": {6: 0.2}}  (~20% of Al at CN 6)
 
-# Coordination limits + overcoordination policy (omit `config` for the defaults).
-cfg = CoordinationConfig(overcoord_policy=SIRAL_OVERCOORD)
+# Coordination limits + the coordination-number distribution (omit `config` for the defaults).
+cfg = CoordinationConfig(cn_distr=SIRAL_CN_DISTR)
 struct = initialize_structure_blank(cell=[22.0, 22.0, 40.0], config=cfg)
 struct.set_seed(42)                                  # reproducible: same seed -> same structure
 

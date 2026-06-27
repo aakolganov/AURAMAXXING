@@ -11,7 +11,7 @@ from default_constants import (
     default_max_cn,
     default_min_cn,
     pair_cutoffs,
-    default_overcoord_policy,
+    default_cn_distr,
     default_oxidation,
     sample_dist as default_sample_dist,
     d_min_max as default_d_min_max,
@@ -20,7 +20,7 @@ from default_constants import (
 
 @dataclass
 class CoordinationConfig:
-    """Coordination limits and the overcoordination policy for a structure.
+    """Coordination limits and the coordination-number distribution for a structure.
 
     Parameters
     ----------
@@ -30,9 +30,10 @@ class CoordinationConfig:
         Element-pair bonding cutoffs used to build the coordination graph.
     sample_dist, d_min_max : dict
         Per-pair bond-length sampling distributions and collision [min, max] ranges.
-    overcoord_policy : dict
-        Per-element overcoordination policy, e.g. ``{"Al": {"max_cn": 6,
-        "fraction": 0.2}}``. ``{}`` (default) disables the feature.
+    cn_distr : dict
+        Per-element expected coordination-number distribution: a single CN, a
+        ``{cn: fraction}`` mapping, or a list of ``{cn, fraction, oxidation?}``. ``{}``
+        (default) uses the curated per-element default CN for every element.
     oxidation : dict
         Per-element signed oxidation state (sign defines cation vs anion). Used by
         ``charge()`` and the growth attachment rule.
@@ -42,5 +43,5 @@ class CoordinationConfig:
     cut_offs: dict = field(default_factory=pair_cutoffs.copy)
     sample_dist: dict = field(default_factory=default_sample_dist.copy)
     d_min_max: dict = field(default_factory=default_d_min_max.copy)
-    overcoord_policy: dict = field(default_factory=default_overcoord_policy.copy)
+    cn_distr: dict = field(default_factory=default_cn_distr.copy)
     oxidation: dict = field(default_factory=default_oxidation.copy)

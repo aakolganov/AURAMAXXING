@@ -117,12 +117,18 @@ El_O_BONDLENGTH = 1.63 #bond lenght for Si/Al - O bond
 OVER_POS = {"Si": False, "O": True, "H": False, "Al": False}
 
 
-# Overcoordination policy: per element, allow a random fraction of atoms to use an
-# elevated max coordination number. {} means the feature is off (every atom uses the
-# per-element max_cn). Each eligible atom is independently tagged at creation with
-# probability "fraction" (Bernoulli), so the realised fraction is approximate.
-default_overcoord_policy: Dict[str, Dict] = {}
+# Coordination-number distribution (cn_distr): per element, the expected coordination
+# number(s) and their fractions. {} means "use the curated per-element default CN" for every
+# element. Each atom is independently assigned a CN at creation by sampling the distribution
+# (one draw), so the realised fractions are approximate. Accepted per-element input forms:
+#   Si: 4                       # a single expected CN -> all Si are CN 4
+#   Al: {4: 0.8, 6: 0.2}        # 80% CN 4, 20% CN 6
+#   Si: [{cn: 4, fraction: 0.9}, {cn: 3, fraction: 0.1, oxidation: 3}]   # CN + oxidation
+# A CN sets the atom's max coordination; an optional per-variant oxidation overrides the
+# element's default oxidation state for that same fraction. Any unspecified remaining fraction
+# (sum < 1) falls back to the curated element default.
+default_cn_distr: Dict[str, object] = {}
 
-# Example policy used by the Siral generation scripts: ~20% of Al atoms may reach CN 6
-# (octahedral), the rest stay capped at the standard CN 4 (tetrahedral).
-SIRAL_OVERCOORD: Dict[str, Dict] = {"Al": {"max_cn": 6, "fraction": 0.2}}
+# Example used by the Siral generation scripts: ~20% of Al grown as CN 6 (octahedral), the
+# rest at the standard CN 4 (tetrahedral).
+SIRAL_CN_DISTR: Dict[str, object] = {"Al": {6: 0.2}}
