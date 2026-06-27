@@ -14,6 +14,8 @@ from default_constants import (
     default_oxidation,
     default_min_cn,
     default_overcoord_policy,
+    sample_dist as default_sample_dist,
+    d_min_max as default_d_min_max,
 )
 from .limits import Limits
 from .config import CoordinationConfig
@@ -24,6 +26,8 @@ class AmorphousStruc:
     max_cn: dict = field(default_factory=default_max_cn.copy)
     min_cn: dict = field(default_factory=default_min_cn.copy)
     cut_offs: dict = field(default_factory=pair_cutoffs.copy)
+    sample_dist: dict = field(default_factory=default_sample_dist.copy)
+    d_min_max: dict = field(default_factory=default_d_min_max.copy)
     overcoord_policy: dict = field(default_factory=default_overcoord_policy.copy)
     oxidation: dict = field(default_factory=default_oxidation.copy)
     rng: np.random.Generator = field(default_factory=np.random.default_rng)
@@ -103,7 +107,10 @@ class AmorphousStruc:
         exist the result is exactly the per-element defaults (back-compatible).
         """
         symbols = np.array(self.symbols)
-        base = np.array([self.max_cn[s] for s in symbols], dtype=int)
+        # A foreign element with no max_cn (e.g. a loaded substrate of an unconfigured
+        # element) is treated as already saturated (huge cap) so growth never tries to
+        # attach to it, rather than crashing with a KeyError.
+        base = np.array([self.max_cn.get(s, 10**6) for s in symbols], dtype=int)
         override = self.atoms.arrays.get("max_cn")
         if override is None:
             return base
@@ -117,7 +124,8 @@ class AmorphousStruc:
         under-coordination floor that drives saturation stays per-element.
         """
         symbols = np.array(self.symbols)
-        return np.array([self.min_cn[s] for s in symbols], dtype=int)
+        # A foreign element with no min_cn is never flagged under-coordinated (floor 0).
+        return np.array([self.min_cn.get(s, 0) for s in symbols], dtype=int)
 
 
     def _assign_max_cn(self, symbol: str) -> int:
@@ -194,7 +202,12 @@ class AmorphousStruc:
         symbols = self.atoms.get_chemical_symbols()
         dists = self.atoms.get_distances(idx, list(range(idx)), mic=True)
         for j, d in enumerate(dists):
+            # Order-independent lookup: ASE's neighbor_list (used by the full rebuild) treats
+            # element pairs as unordered, so try both key orders to match it exactly even when
+            # cut_offs is not symmetric (#13).
             cutoff = self.cut_offs.get((sym_new, symbols[j]))
+            if cutoff is None:
+                cutoff = self.cut_offs.get((symbols[j], sym_new))
             if cutoff is not None and d < cutoff:
                 self._graph.add_edge(idx, j)
 
@@ -363,6 +376,8 @@ def AmorphousStruc_factory(
             max_cn=config.max_cn.copy(),
             min_cn=config.min_cn.copy(),
             cut_offs=config.cut_offs.copy(),
+            sample_dist=config.sample_dist.copy(),
+            d_min_max=config.d_min_max.copy(),
             overcoord_policy=config.overcoord_policy.copy(),
             oxidation=config.oxidation.copy(),
         )

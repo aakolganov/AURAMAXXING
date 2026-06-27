@@ -13,6 +13,8 @@ from default_constants import (
     pair_cutoffs,
     default_overcoord_policy,
     default_oxidation,
+    sample_dist as default_sample_dist,
+    d_min_max as default_d_min_max,
 )
 
 
@@ -26,6 +28,8 @@ class CoordinationConfig:
         Per-element maximum / minimum coordination numbers.
     cut_offs : dict
         Element-pair bonding cutoffs used to build the coordination graph.
+    sample_dist, d_min_max : dict
+        Per-pair bond-length sampling distributions and collision [min, max] ranges.
     overcoord_policy : dict
         Per-element overcoordination policy, e.g. ``{"Al": {"max_cn": 6,
         "fraction": 0.2}}``. ``{}`` (default) disables the feature.
@@ -36,5 +40,7 @@ class CoordinationConfig:
     max_cn: dict = field(default_factory=default_max_cn.copy)
     min_cn: dict = field(default_factory=default_min_cn.copy)
     cut_offs: dict = field(default_factory=pair_cutoffs.copy)
+    sample_dist: dict = field(default_factory=default_sample_dist.copy)
+    d_min_max: dict = field(default_factory=default_d_min_max.copy)
     overcoord_policy: dict = field(default_factory=default_overcoord_policy.copy)
     oxidation: dict = field(default_factory=default_oxidation.copy)

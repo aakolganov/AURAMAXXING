@@ -4,7 +4,6 @@ from tqdm import tqdm
 from pathlib import Path
 import numpy as np
 
-from default_constants import sample_dist
 from helpers.atom_placing import place_atom_sphere, place_atom_most_z_space, slice_structure, build_placement_cache
 from interfaces.base_interface import CalculatorInterface
 from base import AmorphousStruc
@@ -77,7 +76,7 @@ def grow_structure(
                 # anchors and fall through to the melt-quench that relieves the jam.
                 if idx_connect_to < 0:
                     break
-                bond_length = sample_dist[amorphous_struct.atoms[idx_connect_to].symbol][atom_to_add]
+                bond_length = amorphous_struct.sample_dist[amorphous_struct.atoms[idx_connect_to].symbol][atom_to_add]
                 placement_success = place_atom_sphere(
                     amorphous_struct,
                     atom_to_add,
