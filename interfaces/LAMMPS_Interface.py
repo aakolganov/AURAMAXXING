@@ -95,6 +95,17 @@ class LMPInterface(CalculatorInterface):
         lmp_calc : LAMMPSlib
            Initialized LAMMPS calculator
         """
+        # BKS only parameterizes Si/Al/O (bks_charges). Anything else -- including the H that
+        # saturation adds -- would get a LAMMPS type but no pair_coeff/charge, silently building
+        # a broken, non-neutral potential. Reject it up front and point at the MLIP backends.
+        unsupported = set(atoms.get_chemical_symbols()) - set(bks_charges)
+        if unsupported:
+            raise ValueError(
+                f"the LAMMPS/BKS backend only supports {sorted(bks_charges)} (silica-aluminas); "
+                f"found unsupported element(s) {sorted(unsupported)}. Use an MLIP calculator "
+                f"('mace' or 'uma') for this composition."
+            )
+
         # Reuse the cached calculator when the element set and atom count are
         # unchanged (e.g. the repeated finalize/optimize calls on one structure).
         # We key on atom count too because a reused LAMMPSlib instance is only safe

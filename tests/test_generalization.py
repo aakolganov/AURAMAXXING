@@ -77,3 +77,11 @@ def test_grow_titania_with_covalent_distances(dummy_calc, tmp_path):
     assert dm.min() > 1.0                                       # no hard steric clashes
     pos = s.atoms.get_positions()
     assert np.all(pos >= 0.0) and np.all(pos < np.array([20.0, 20.0, 25.0]))
+
+
+def test_non_orthogonal_cell_rejected():
+    # growth's grid assumes an orthogonal box; a tilted cell must error at init, not silently
+    # produce a wrong grid / out-of-box placements.
+    from base.initialize import initialize_structure_blank
+    with pytest.raises(ValueError, match="non-orthogonal"):
+        initialize_structure_blank(cell=[[20, 0, 0], [2, 20, 0], [0, 0, 30]])

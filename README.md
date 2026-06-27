@@ -2,7 +2,7 @@
 
 **A**morphous s**U**rface **R**esearch **A**nd **M**odeling **A**nd o**X**ide e**X**ploration **I**ntegrated i**N** **G**eneration
 
-Tools to efficiently generate mixed Si/Al (for now) amorphous oxide surfaces with ASE, using a classical BKS/LAMMPS force field and/or machine-learning potentials (MACE, UMA) for relaxation.
+Tools to efficiently generate amorphous oxide surfaces with ASE. Bare-surface growth is composition-general (oxidation states, coordination numbers and bond-length distances are data-driven from a curated table + a covalent-radii model), relaxed with machine-learning potentials (MACE, UMA); a classical BKS/LAMMPS force field is kept as a lightweight generator for silica(-aluminas) only. (Chemical saturation is still Si/Al/O/H-specific.)
 
 Contributors:
 
@@ -96,9 +96,18 @@ structure:                  # start from a blank box OR a loaded file (exactly o
   # from_file: POSCAR_bare_gAl_110   # grow on top of an existing surface
   # ase_read_kwargs: {}
 
-composition:
-  target_ratios: {Si: 4, Al: 2, O: 11}   # relative weights (here a charge-neutral Si/Al oxide)
-  target_number_atoms: 440                # counts any pre-loaded substrate atoms
+composition:                # exactly one input form; all reduce to charge-neutral integer counts
+  # (a) elemental ratio (relative weights) + total atom count:
+  ratio: {Si: 4, Al: 2, O: 11}
+  total_atoms: 440
+  # (b) brutto formula + total:        formula: "SiO2"        / total_atoms: 432
+  # (c) structural mix + total:        mix: {SiO2: 7, Al2O3: 1}    (or "SiO2:Al2O3=7:1",
+  #                                         or "70% SiO2 + 30% Al2O3") / total_atoms: 440
+  # (d) explicit per-element counts (no total needed):   counts: {Si: 160, O: 320}
+  # Legacy keys 'target_ratios' + 'target_number_atoms' still work (alias of form (a)).
+  # The counts are adjusted to the nearest charge-neutral integer composition (sum of
+  # counts x oxidation states = 0), keeping the requested ratios as close as possible; the
+  # adjustment is reported. target_number_atoms counts any pre-loaded substrate atoms.
 
 limits:
   # each side is: flat(z) | fourier(z_av, alpha) | surface (top of a loaded slab).
@@ -107,14 +116,24 @@ limits:
   top:    {type: fourier, z_av: 24.0, alpha: 0.3, n_max: 6, m_max: 6}
   fix: bottom                              # bottom | top | null
 
-coordination:               # optional; partial overrides merge onto the defaults
+coordination:               # optional; partial overrides merge onto the derived defaults
+  # Defaults are derived for the run's element set: oxidation states + coordination numbers
+  # from a curated table of common oxide formers (base/element_data.py), and per-pair
+  # bond-length / collision / bonding-cutoff distances from a covalent-radii model (ASE
+  # covalent_radii). Any element not in the curated table must be given oxidation + max_cn +
+  # min_cn here (or added to the table).
+  oxidation: {Ti: 4}                       # per-element signed oxidation state (sign = cation/anion)
   max_cn: {Al: 4}                          # per-element max coordination
   min_cn: {Al: 3}                          # per-element saturation floor
-  cut_offs: {Si-O: 1.95}                   # "El-El" bonding cutoffs (Å)
+  distance: {bond_factor: 1.0, bond_dev: 0.15, cutoff_pad: 0.25, collision_factor: 0.75}
+                                           # covalent-radii distance-model knobs (all optional)
+  cut_offs: {Si-O: 1.95}                   # raw "El-El" cutoff override (must stay >= window upper)
   overcoord_policy:                        # let a random fraction grow over-coordinated
     Al: {max_cn: 6, fraction: 0.2}         # ~20% of Al may reach CN 6, rest cap at 4
 
 calculators:                # type: lammps | mace | uma; extra keys are backend kwargs
+  # NB: the lammps/BKS backend is a lightweight generator for silica(-aluminas) only -- it
+  # supports Si/Al/O and raises on any other element. Use mace/uma for arbitrary oxides.
   growth:     {type: lammps, dump_path: dump_lmp}
   saturation: {type: mace, mace_model_path: model.model, device: cuda, dump_path: dump_mace}
               # optional; defaults to the growth calculator. mace needs mace_model_path;
