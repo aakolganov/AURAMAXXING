@@ -144,6 +144,26 @@ class AmorphousStruc:
         return 0
 
 
+    @property
+    def _policy_has_oxidation(self) -> bool:
+        """True when any policy entry carries an ``oxidation`` key, i.e. a minority of an
+        element is grown with a different oxidation state (and CN). Only then is the per-atom
+        ``oxidation`` array materialised, so policies without it stay byte-for-byte as before."""
+        return any(isinstance(p, dict) and "oxidation" in p
+                   for p in self.overcoord_policy.values())
+
+
+    def _variant_oxidation(self, symbol: str, max_cn_tag: int) -> int:
+        """Per-atom oxidation override for a minority-variant atom, tied to the SAME draw as
+        the max-CN tag (no extra rng draw): the policy's ``oxidation`` when this atom was
+        tagged (``max_cn_tag != 0``), else 0 (use the element default). A variant therefore
+        gets its alternative CN and oxidation together (e.g. "10% of Si as 3+ with CN 3")."""
+        if max_cn_tag == 0:
+            return 0
+        policy = self.overcoord_policy.get(symbol)
+        return int(policy.get("oxidation", 0)) if policy else 0
+
+
     def apply_overcoord_policy(self) -> None:
         """(Re)assign per-atom max-CN overrides for all current atoms.
 
@@ -156,6 +176,10 @@ class AmorphousStruc:
             return
         arr = np.array([self._assign_max_cn(s) for s in self.symbols], dtype=int)
         self.atoms.set_array("max_cn", arr)
+        if self._policy_has_oxidation:
+            ox = np.array([self._variant_oxidation(s, int(arr[i]))
+                           for i, s in enumerate(self.symbols)], dtype=int)
+            self.atoms.set_array("oxidation", ox)
 
 
     def get_atom_count(self, atom_type: str) -> int:
@@ -183,6 +207,13 @@ class AmorphousStruc:
             if "max_cn" not in self.atoms.arrays:
                 self.atoms.set_array("max_cn", np.zeros(len(self.atoms), dtype=int))
             self.atoms.arrays["max_cn"][new_idx] = tag
+            # A variant atom also carries an alternative oxidation state (same draw as the
+            # max-CN tag). Only materialised when a policy uses 'oxidation', so plain
+            # max-CN policies are unchanged.
+            if self._policy_has_oxidation:
+                if "oxidation" not in self.atoms.arrays:
+                    self.atoms.set_array("oxidation", np.zeros(len(self.atoms), dtype=int))
+                self.atoms.arrays["oxidation"][new_idx] = self._variant_oxidation(atom_type, tag)
 
         if self._graph is not None and not self._need_graph_update:
             self._add_atom_to_graph(new_idx)
@@ -218,9 +249,11 @@ class AmorphousStruc:
         # (e.g. an Al allowed CN 6) can't carry over to a different element. 0 falls
         # back to the new element's default. (Today move_atom only replaces in place
         # with the same symbol, so this is defensive.)
-        override = self.atoms.arrays.get("max_cn")
-        if override is not None and self.atoms[index].symbol != new_atom_type:
-            override[index] = 0
+        if self.atoms[index].symbol != new_atom_type:
+            for key in ("max_cn", "oxidation"):
+                arr = self.atoms.arrays.get(key)
+                if arr is not None:
+                    arr[index] = 0
         self.atoms.positions[index] = new_position
         self.atoms.numbers[index] = atomic_numbers[new_atom_type]
         self._need_graph_update = True
@@ -297,17 +330,30 @@ class AmorphousStruc:
         default, or an explicit ``defined_charges`` override). Raises a clear error, naming
         the element, when an element present in the structure has no oxidation state."""
         table = self.oxidation if defined_charges is None else defined_charges
-        atom_counts = Counter(self.atoms.get_chemical_symbols())
+        symbols = self.atoms.get_chemical_symbols()
 
-        net_charge = 0
-        for at, count in atom_counts.items():
+        def _element_charge(at: str) -> int:
             try:
-                net_charge += count * table[at]
+                return table[at]
             except KeyError:
                 raise ValueError(
                     f"charge(): no oxidation state for element {at!r}; add it to the "
                     f"structure's oxidation table (or the curated base/element_data table)."
                 ) from None
+
+        # Per-atom oxidation overrides (minority variants tagged by the overcoord policy) are
+        # honoured only against the structure's own table; an explicit defined_charges applies
+        # uniformly. 0 in the override array means "unset -> use the element default".
+        override = None if defined_charges is not None else self.atoms.arrays.get("oxidation")
+        if override is None:
+            # Fast path (no variants): per-element sum, unchanged behaviour.
+            atom_counts = Counter(symbols)
+            return sum(count * _element_charge(at) for at, count in atom_counts.items())
+
+        net_charge = 0
+        for i, at in enumerate(symbols):
+            q = int(override[i])
+            net_charge += q if q != 0 else _element_charge(at)
         return net_charge
 
 

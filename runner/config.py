@@ -502,6 +502,23 @@ def _parse_distance_knobs(raw, where: str) -> dict:
     return {k: float(v) for k, v in d.items()}
 
 
+def _parse_overcoord_policy(raw, where: str) -> dict:
+    """Validate the per-element overcoordination / site-variant policy. Each entry tags a
+    random ``fraction`` of that element with an elevated/alternative ``max_cn`` and, optionally,
+    a different ``oxidation`` state (the same tagged atoms get both)."""
+    policy = _as_dict(raw, where)
+    out = {}
+    for el, entry in policy.items():
+        e = _as_dict(entry, f"{where}.{el}")
+        _check_keys(e, {"max_cn", "fraction", "oxidation"}, f"{where}.{el}",
+                    required=("max_cn", "fraction"))
+        parsed = {"max_cn": int(e["max_cn"]), "fraction": float(e["fraction"])}
+        if "oxidation" in e:
+            parsed["oxidation"] = int(e["oxidation"])
+        out[str(el)] = parsed
+    return out
+
+
 def _validate_cutoff_overrides(overrides: dict, cfg: CoordinationConfig, where: str) -> None:
     """A raw cut_off override must not fall below the derived bond-sampling upper bound for the
     pair, or a sampled bond could be committed yet scored as non-bonded (the coherence bug).
@@ -538,7 +555,7 @@ def _build_coordination(d: Optional[dict], where: str, *, elements, oxidation) -
         oxidation=tables["oxidation"],
     )
     if d and "overcoord_policy" in d:
-        cfg.overcoord_policy.update(_as_dict(d["overcoord_policy"], f"{where}.overcoord_policy"))
+        cfg.overcoord_policy.update(_parse_overcoord_policy(d["overcoord_policy"], f"{where}.overcoord_policy"))
     if d and "cut_offs" in d:
         overrides = _parse_cut_offs(d["cut_offs"], f"{where}.cut_offs")
         _validate_cutoff_overrides(overrides, cfg, f"{where}.cut_offs")

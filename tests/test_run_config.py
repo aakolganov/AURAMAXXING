@@ -37,6 +37,20 @@ def test_coordination_merges_onto_defaults():
     assert cfg.coordination.overcoord_policy == {"Al": {"max_cn": 6, "fraction": 0.2}}
 
 
+def test_overcoord_policy_accepts_oxidation():
+    d = _minimal()
+    d["coordination"] = {"overcoord_policy": {"Si": {"max_cn": 3, "oxidation": 3, "fraction": 0.1}}}
+    cfg = load_config(d)
+    assert cfg.coordination.overcoord_policy["Si"] == {"max_cn": 3, "oxidation": 3, "fraction": 0.1}
+
+
+def test_overcoord_policy_rejects_unknown_or_missing_key():
+    d = _minimal()
+    d["coordination"] = {"overcoord_policy": {"Si": {"max_cn": 3, "fractoin": 0.1}}}  # typo + no fraction
+    with pytest.raises(ValueError):
+        load_config(d)
+
+
 def test_cut_offs_parse_to_symmetric_tuples():
     d = _minimal()
     d["coordination"] = {"cut_offs": {"Si-O": 1.95}}

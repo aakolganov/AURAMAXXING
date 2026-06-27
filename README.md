@@ -128,8 +128,13 @@ coordination:               # optional; partial overrides merge onto the derived
   distance: {bond_factor: 1.0, bond_dev: 0.15, cutoff_pad: 0.25, collision_factor: 0.75}
                                            # covalent-radii distance-model knobs (all optional)
   cut_offs: {Si-O: 1.95}                   # raw "El-El" cutoff override (must stay >= window upper)
-  overcoord_policy:                        # let a random fraction grow over-coordinated
+  overcoord_policy:                        # grow a random fraction of an element as a variant
     Al: {max_cn: 6, fraction: 0.2}         # ~20% of Al may reach CN 6, rest cap at 4
+    Si: {max_cn: 3, oxidation: 3, fraction: 0.1}  # ~10% of Si as a 3+ / CN-3 site (the same
+                                           # tagged atoms get both the alt CN and oxidation).
+                                           # NB: the charge-neutral target uses per-element
+                                           # oxidation; fractional-oxidation variants shift the
+                                           # realised charge slightly (settled by saturation).
 
 calculators:                # type: lammps | mace | uma; extra keys are backend kwargs
   # NB: the lammps/BKS backend is a lightweight generator for silica(-aluminas) only -- it

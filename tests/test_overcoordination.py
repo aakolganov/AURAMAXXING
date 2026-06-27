@@ -8,6 +8,9 @@ from base.initialize import initialize_structure_blank
 
 
 SIRAL = {"Al": {"max_cn": 6, "fraction": 0.2}}
+# a minority-variant policy that ALSO changes the oxidation state: ~30% of Si grown as a
+# 3+ / CN-3 species instead of the default 4+ / CN-4.
+SI_VARIANT = {"Si": {"max_cn": 3, "oxidation": 3, "fraction": 0.3}}
 
 
 # --- back-compat: no policy behaves exactly as before -------------------------------
@@ -143,6 +146,71 @@ def test_policy_growth_reproducible(dummy_calc, tmp_path):
     assert sym1 == sym2
     assert np.allclose(pos1, pos2)
     assert np.array_equal(tag1, tag2)
+
+
+# --- fractional oxidation/CN variants (plan Phase 5) --------------------------------
+
+def test_oxidation_variant_is_coupled_to_cn_tag():
+    cfg = CoordinationConfig(overcoord_policy=SI_VARIANT)
+    n = 2000
+    s = AmorphousStruc_factory(
+        symbols=["Si"] * n, positions=np.random.RandomState(0).rand(n, 3) * 18,
+        cell=[20.0, 20.0, 20.0], pbc=True, seed=123, config=cfg,
+    )
+    s.apply_overcoord_policy()
+    mx = s.atoms.arrays["max_cn"]
+    ox = s.atoms.arrays["oxidation"]
+    assert set(np.unique(mx)).issubset({0, 3})
+    assert set(np.unique(ox)).issubset({0, 3})
+    # the SAME atoms carry the variant CN and the variant oxidation (one shared draw)
+    assert np.array_equal(mx == 3, ox == 3)
+    assert 0.25 < (ox == 3).mean() < 0.35
+
+
+def test_oxidation_free_policy_creates_no_oxidation_array():
+    # SIRAL has no 'oxidation' key -> the per-atom oxidation array is never materialised,
+    # so plain max-CN policies stay byte-for-byte as before.
+    cfg = CoordinationConfig(overcoord_policy=SIRAL)
+    s = AmorphousStruc_factory(cell=[20.0, 20.0, 20.0], pbc=True, seed=1, config=cfg)
+    for _ in range(20):
+        s.commit_atom("Al", np.random.rand(3) * 18)
+    assert "max_cn" in s.atoms.arrays
+    assert "oxidation" not in s.atoms.arrays
+
+
+def test_charge_honours_per_atom_oxidation_variants():
+    cfg = CoordinationConfig(overcoord_policy=SI_VARIANT)
+    s = AmorphousStruc_factory(
+        symbols=["Si", "Si", "O", "O", "O", "O"],
+        positions=[[i * 3.0, 0, 0] for i in range(6)],
+        cell=[40.0, 40.0, 40.0], pbc=True, seed=1, config=cfg,
+    )
+    assert s.charge() == 0                       # no variant array yet: 2*4 + 4*(-2)
+    s.atoms.set_array("oxidation", np.array([3, 0, 0, 0, 0, 0], dtype=int))
+    assert s.charge() == -1                      # first Si as 3+: 3 + 4 - 8
+
+
+def test_oxidation_variant_growth_reproducible(dummy_calc, tmp_path):
+    from growth.new_growth import grow_structure
+    from base.limits import make_limit_flat, make_limits_fourier, fix_limits
+
+    policy = {"Si": {"max_cn": 4, "oxidation": 3, "fraction": 0.25}}  # CN unchanged, ox variant
+
+    def run():
+        cfg = CoordinationConfig(overcoord_policy=policy)
+        s = initialize_structure_blank(cell=[18.0, 18.0, 30.0], config=cfg)
+        s.set_seed(7)
+        make_limit_flat(s, z_val=10.0, is_for="bottom")
+        make_limits_fourier(s, z_av=18.0, alpha=1.0, is_for="top")
+        fix_limits(s.limits, hard_limit="bottom")
+        grow_structure(s, target_number_atoms=60, target_ratios={"Si": 1, "O": 2},
+                       calculator=dummy_calc, output_dir=tmp_path / "g")
+        return s.symbols, s.atoms.arrays.get("oxidation")
+
+    sym1, ox1 = run()
+    sym2, ox2 = run()
+    assert sym1 == sym2
+    assert ox1 is not None and np.array_equal(ox1, ox2)
 
 
 # --- M2: a terminal cap must not over-coordinate a bystander atom ------------------------
