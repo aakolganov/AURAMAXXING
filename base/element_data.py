@@ -176,6 +176,22 @@ def derive_pair_distances(
       different-element exclusion radius, kept below ``lo``) and ``dmax = cutoff`` (the
       same-element exclusion radius == the self-bond cutoff, blocking spurious homo bonds).
     """
+    # Validate the knobs so the coherence guarantees below cannot be silently broken by a
+    # user-tuned 'distance' block: a negative bond_factor/bond_dev, a negative cutoff_pad
+    # (which would put the cutoff below the window upper bound), or a collision_factor that is
+    # not strictly less than bond_factor (which would make the clash radius reach into the
+    # bond window) are all rejected here rather than producing incoherent tables.
+    if bond_factor <= 0:
+        raise ValueError(f"bond_factor must be > 0 (got {bond_factor})")
+    if bond_dev < 0:
+        raise ValueError(f"bond_dev must be >= 0 (got {bond_dev})")
+    if cutoff_pad < 0:
+        raise ValueError(f"cutoff_pad must be >= 0 (got {cutoff_pad}); the bonding cutoff would "
+                         f"otherwise fall below the bond-sampling window")
+    if collision_factor >= bond_factor:
+        raise ValueError(f"collision_factor ({collision_factor}) must be < bond_factor "
+                         f"({bond_factor}) so the collision floor stays below the bond window")
+
     elements = list(dict.fromkeys(elements))   # dedup, preserve order
     radii = {e: _covalent_radius(e) for e in elements}
 
@@ -196,6 +212,14 @@ def derive_pair_distances(
                     f"reduce bond_dev or raise bond_factor")
             cutoff = hi + cutoff_pad
             dmin = collision_factor * r
+            # Coherence (enforced, not just asserted in tests): the different-element collision
+            # floor must sit strictly below the bond window so a legitimately bonded neighbour
+            # is never rejected as a clash. With collision_factor < bond_factor this holds for
+            # large enough r; guard the small-radius pairs (e.g. H-H) explicitly.
+            if dmin >= lo:
+                raise ValueError(
+                    f"collision floor for {a}-{b} (dmin={dmin:.3f}) is not below the bond "
+                    f"window start (lo={lo:.3f}); lower collision_factor or bond_dev")
             windows[b] = uniform(loc=lo, scale=hi - lo)
             dmm[b] = [dmin, cutoff]
             pair_cutoffs[(a, b)] = cutoff
@@ -207,6 +231,7 @@ def derive_pair_distances(
 def build_element_tables(
         elements,
         *,
+        spectator_elements=None,
         distance_knobs: dict | None = None,
         oxidation: dict | None = None,
         max_cn: dict | None = None,
@@ -220,8 +245,15 @@ def build_element_tables(
     ``oxidation``/``max_cn``/``min_cn`` override dicts taking precedence. An element absent
     from the curated table is allowed only if fully specified by the overrides; otherwise the
     clear missing-element error is raised.
+
+    ``spectator_elements`` are present in the structure but never grown -- e.g. a loaded
+    substrate of a foreign element. They get per-pair distance/cutoff rows (so placement and
+    the coordination graph work for them) from covalent radii, but are NOT required to have a
+    curated oxidation/CN and are omitted from the per-element tables (the per-atom CN arrays
+    tolerate them).
     """
     elements = list(dict.fromkeys(elements))
+    spectators = [e for e in dict.fromkeys(spectator_elements or []) if e not in elements]
     knobs = {**DEFAULT_DISTANCE_KNOBS, **(distance_knobs or {})}
     oxidation = oxidation or {}
     max_cn = max_cn or {}
@@ -239,7 +271,9 @@ def build_element_tables(
         out_max[e] = max_cn.get(e, rec.get("max_cn"))
         out_min[e] = min_cn.get(e, rec.get("min_cn"))
 
-    sample_dist, d_min_max, cut_offs = derive_pair_distances(elements, **knobs)
+    # Distances cover the grown elements AND any spectators, so a loaded foreign substrate is a
+    # valid collision/graph partner instead of triggering a KeyError during placement.
+    sample_dist, d_min_max, cut_offs = derive_pair_distances(elements + spectators, **knobs)
     return {
         "oxidation": out_ox,
         "max_cn": out_max,
