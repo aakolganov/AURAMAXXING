@@ -20,8 +20,8 @@ def choose_atom_idx_to_attach_to(amorphous_struct: AmorphousStruc, atom_type: st
     allowed_attachment_atoms = [el for el, q in ox.items() if (q > 0) != adding_is_cation]
 
     # Build a mask of saturated atoms. max_cn_array() is per-atom: it honours any
-    # overcoordination overrides (e.g. an Al allowed CN 6) and falls back to the
-    # per-element max_cn otherwise.
+    # cn_distr overrides (e.g. an Al grown at CN 6) and falls back to the per-element
+    # max_cn otherwise.
     is_saturated = all_cn >= amorphous_struct.max_cn_array()
 
     # Candidates are atoms of allowed types that are not saturated

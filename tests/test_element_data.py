@@ -12,6 +12,7 @@ from base.element_data import (
     build_element_tables,
     derive_pair_distances,
     element_record,
+    normalize_cn_distr,
 )
 
 
@@ -79,6 +80,46 @@ def test_sampled_bond_length_is_inside_the_window():
         d = sample_dist["Si"]["O"]          # RandomSample.__getitem__ draws a sample
         assert lo <= d < hi
         assert d < pair_cutoffs[("Si", "O")]
+
+
+def test_distance_knob_validation_enforces_coherence():
+    # M4: the coherence invariants are enforced in code, not just asserted in tests.
+    with pytest.raises(ValueError, match="cutoff_pad"):
+        derive_pair_distances(["Si", "O"], cutoff_pad=-0.1)
+    with pytest.raises(ValueError, match="collision_factor"):
+        derive_pair_distances(["Si", "O"], collision_factor=1.0, bond_factor=1.0)
+    with pytest.raises(ValueError, match="bond_factor"):
+        derive_pair_distances(["Si", "O"], bond_factor=0.0)
+    # a collision floor that would reach into the (small) H-H bond window is rejected per-pair
+    with pytest.raises(ValueError, match="collision floor"):
+        derive_pair_distances(["H"], collision_factor=0.95, bond_factor=1.0, bond_dev=0.15)
+
+
+def test_spectator_elements_get_distances_only():
+    # M2: a present-but-not-grown element (e.g. a foreign substrate) gets distance/cutoff rows
+    # from covalent radii but is NOT required to be curated and is absent from the per-element
+    # tables (the per-atom CN arrays tolerate it).
+    t = build_element_tables(["Si", "O"], spectator_elements=["C"])   # C is not a curated oxide former
+    assert ("C", "O") in t["cut_offs"] and ("O", "C") in t["cut_offs"]
+    assert "C" in t["d_min_max"] and "O" in t["d_min_max"]["C"]
+    assert "C" in t["sample_dist"]
+    assert "C" not in t["oxidation"] and "C" not in t["max_cn"] and "C" not in t["min_cn"]
+    # a spectator already among the grown elements is not duplicated/treated specially
+    t2 = build_element_tables(["Si", "O"], spectator_elements=["O"])
+    assert set(t2["oxidation"]) == {"Si", "O"}
+
+
+def test_cn_distr_rejects_sentinel_collisions():
+    # cn <= 0 and a variant oxidation of 0 collide with the "0 = unset" per-atom sentinel and
+    # would be silently ignored; both must raise.
+    with pytest.raises(ValueError, match="cn"):
+        normalize_cn_distr({"Si": {0: 0.2}})
+    with pytest.raises(ValueError, match="cn"):
+        normalize_cn_distr({"Si": [{"cn": -1, "fraction": 0.2}]})
+    with pytest.raises(ValueError, match="oxidation"):
+        normalize_cn_distr({"Si": [{"cn": 4, "fraction": 0.2, "oxidation": 0}]})
+    # a normal distribution still normalizes fine
+    assert normalize_cn_distr({"Al": {6: 0.2}}) == {"Al": [{"cn": 6, "fraction": 0.2}]}
 
 
 def test_build_element_tables_shapes_and_overrideable_knobs():

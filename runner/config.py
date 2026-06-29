@@ -161,13 +161,22 @@ def _parse_composition_block(d: dict, where: str) -> dict:
                          f"'counts' (or legacy 'target_ratios'); got {forms}")
     form = forms[0]
 
+    # The total-atoms key must match the form, so a mismatched/extra total key isn't silently
+    # ignored: 'counts' takes neither; legacy 'target_ratios' takes 'target_number_atoms';
+    # the other forms take 'total_atoms'.
+    expected_total = None if form == "counts" else ("target_number_atoms" if form == "target_ratios" else "total_atoms")
+    stray_total = ({"total_atoms", "target_number_atoms"} - {expected_total}) & set(d)
+    if stray_total:
+        raise ValueError(f"{where}: composition form {form!r} does not accept {sorted(stray_total)}"
+                         + (f"; use {expected_total!r}" if expected_total else " (explicit counts need no total)"))
+
     if form == "counts":                           # explicit counts: no total needed
         counts = {str(k): int(v) for k, v in _as_dict(d["counts"], f"{where}.counts").items()}
         if any(v < 0 for v in counts.values()) or sum(counts.values()) == 0:
             raise ValueError(f"{where}.counts: need positive integer atom counts")
         return {"weights": None, "counts": counts, "total": None, "elements": set(counts)}
 
-    total_key = "target_number_atoms" if form == "target_ratios" else "total_atoms"
+    total_key = expected_total
     if total_key not in d:
         raise ValueError(f"{where}: composition form {form!r} needs '{total_key}'")
     total = int(d[total_key])
@@ -474,8 +483,22 @@ def _coord_override_elements(coord_block: Optional[dict]) -> set:
     cut = coord_block.get("cut_offs")
     if isinstance(cut, dict):
         for pair in cut:
-            elems.update(str(pair).split("-"))
+            parts = str(pair).split("-")
+            if len(parts) == 2:                 # ignore malformed keys here; _parse_cut_offs
+                elems.update(parts)             # raises the clear 'Element-Element' error
     return elems
+
+
+def _loaded_elements(structure_block: dict) -> set:
+    """Element symbols in a loaded ``from_file`` structure (empty for a blank-box run). Read at
+    config load so the coordination derivation includes a substrate's elements as spectators.
+    A missing file returns empty -- StructureSpec.from_dict raises the clear FileNotFoundError."""
+    ff = structure_block.get("from_file")
+    if not ff or not Path(ff).exists():
+        return set()
+    from ase.io import read
+    atoms = read(ff, **(structure_block.get("ase_read_kwargs") or {}))
+    return set(atoms.get_chemical_symbols())
 
 
 def _resolve_oxidation(elements, coord_block: Optional[dict], where: str) -> dict:
@@ -533,9 +556,13 @@ def _validate_cutoff_overrides(overrides: dict, cfg: CoordinationConfig, where: 
                 f"cut_off, or use a 'distance' override to move the whole window.")
 
 
-def _build_coordination(d: Optional[dict], where: str, *, elements, oxidation) -> CoordinationConfig:
+def _build_coordination(d: Optional[dict], where: str, *, elements, oxidation,
+                        spectators=()) -> CoordinationConfig:
     """Derive the covalent-radii distance tables + curated coordination defaults for the run's
-    element set, then apply the partial user overrides (same merge convention as before)."""
+    element set, then apply the partial user overrides (same merge convention as before).
+
+    ``spectators`` are present-but-not-grown elements (a loaded foreign substrate); they get
+    distance/cutoff rows so placement and the graph work, without needing a curated CN/oxidation."""
     d = _as_dict(d, where) if d is not None else None
     if d is not None:
         _check_keys(d, {"max_cn", "min_cn", "cut_offs", "cn_distr", "oxidation", "distance"}, where)
@@ -545,7 +572,8 @@ def _build_coordination(d: Optional[dict], where: str, *, elements, oxidation) -
     min_cn_over = ({str(k): int(v) for k, v in _as_dict(d["min_cn"], f"{where}.min_cn").items()}
                    if d and "min_cn" in d else {})
 
-    tables = build_element_tables(elements, distance_knobs=distance_knobs,
+    tables = build_element_tables(elements, spectator_elements=spectators,
+                                  distance_knobs=distance_knobs,
                                   oxidation=oxidation, max_cn=max_cn_over, min_cn=min_cn_over)
     cfg = CoordinationConfig(
         max_cn=tables["max_cn"], min_cn=tables["min_cn"], cut_offs=tables["cut_offs"],
@@ -566,19 +594,29 @@ def _build_coordination(d: Optional[dict], where: str, *, elements, oxidation) -
 _BKS_SUPPORTED = {"Si", "Al", "O"}
 
 
-def _check_bks_supported(calculators: CalculatorsSpec, comp_elements: set, where: str) -> None:
-    """Fail fast at config load (so --dry-run catches it) when a lammps/BKS calculator is
-    paired with a composition outside Si/Al/O. The LAMMPS interface guards this at build time
-    too -- and also catches the H that saturation adds -- but catching the composition case
-    here gives an immediate, clear error."""
-    uses_lammps = any(c is not None and c.type == "lammps"
-                      for c in (calculators.growth, calculators.saturation))
+def _check_bks_supported(calculators: CalculatorsSpec, comp_elements: set,
+                         saturation_enabled: bool, where: str) -> None:
+    """Fail fast at config load (so --dry-run catches it) when a lammps/BKS calculator can't
+    handle the run. The LAMMPS interface guards this at build time too, but catching it here
+    gives an immediate, clear error. Two cases:
+
+    - growth with lammps + a composition outside Si/Al/O; and
+    - saturation enabled with a lammps saturation calculator: saturation adds H, which BKS has
+      no parameters for, so it can never relax a saturated cell (rejected for any composition).
+    """
     unsupported = comp_elements - _BKS_SUPPORTED
-    if uses_lammps and unsupported:
+    if calculators.growth.type == "lammps" and unsupported:
         raise ValueError(
             f"{where}: the lammps/BKS backend supports only {sorted(_BKS_SUPPORTED)} "
             f"(silica-aluminas), but the composition contains {sorted(unsupported)}. "
             f"Use a 'mace' or 'uma' calculator for this composition.")
+    if saturation_enabled:
+        effective_sat = calculators.saturation or calculators.growth
+        if effective_sat.type == "lammps":
+            raise ValueError(
+                f"{where}: saturation adds H, which the lammps/BKS backend cannot parameterize, "
+                f"so BKS cannot relax the saturated structure. Use a 'mace' or 'uma' saturation "
+                f"calculator (or disable saturation).")
 
 
 # --- top-level config ---------------------------------------------------------------
@@ -622,11 +660,17 @@ class RunConfig:
         elements = sorted(comp_parsed["elements"] | {"O", "H"} | _coord_override_elements(coord_block))
         oxidation = _resolve_oxidation(elements, coord_block, "coordination")
         composition = _finalize_composition(comp_parsed, oxidation, "composition")
+        # A loaded substrate's elements are present-but-not-grown spectators: they need
+        # distance/cutoff rows (else placement KeyErrors on them) but no curated CN/oxidation.
+        spectators = _loaded_elements(_as_dict(d["structure"], "structure")) - set(elements)
         coordination = _build_coordination(coord_block, "coordination",
-                                           elements=elements, oxidation=oxidation)
+                                           elements=elements, oxidation=oxidation,
+                                           spectators=sorted(spectators))
 
         calculators = CalculatorsSpec.from_dict(d["calculators"], "calculators")
-        _check_bks_supported(calculators, set(composition.target_counts), "calculators")
+        saturation = SaturationSpec.from_dict(d.get("saturation", {}), "saturation")
+        _check_bks_supported(calculators, set(composition.target_counts),
+                             saturation.enabled, "calculators")
 
         return cls(
             structure=StructureSpec.from_dict(d["structure"], "structure"),
@@ -636,7 +680,7 @@ class RunConfig:
             coordination=coordination,
             growth=GrowthSpec.from_dict(d.get("growth", {}), "growth"),
             finalize=FinalizeSpec.from_dict(d.get("finalize", {}), "finalize"),
-            saturation=SaturationSpec.from_dict(d.get("saturation", {}), "saturation"),
+            saturation=saturation,
             charge_correction=ChargeCorrectionSpec.from_dict(d.get("charge_correction", {}), "charge_correction"),
             statistics=StatisticsSpec.from_dict(d.get("statistics", {}), "statistics"),
             debug=DebugSpec.from_dict(d.get("debug", {}), "debug"),

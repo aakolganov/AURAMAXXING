@@ -58,6 +58,24 @@ def test_cn_distr_rejects_fractions_over_one():
         load_config(d)
 
 
+def test_malformed_cut_off_key_gives_clean_error():
+    d = _minimal()
+    d["coordination"] = {"cut_offs": {"Si-O-x": 2.0}}            # not 'Element-Element'
+    with pytest.raises(ValueError, match="Element-Element"):
+        load_config(d)
+
+
+def test_composition_rejects_mismatched_total_key():
+    d = _minimal()
+    d["composition"] = {"ratio": {"Si": 1, "O": 2}, "target_number_atoms": 99}  # wrong total key for 'ratio'
+    with pytest.raises(ValueError, match="total_atoms|target_number_atoms"):
+        load_config(d)
+    d2 = _minimal()
+    d2["composition"] = {"counts": {"Si": 1, "O": 2}, "total_atoms": 99}        # counts takes no total
+    with pytest.raises(ValueError, match="total"):
+        load_config(d2)
+
+
 def test_cut_offs_parse_to_symmetric_tuples():
     d = _minimal()
     d["coordination"] = {"cut_offs": {"Si-O": 1.95}}
@@ -132,6 +150,41 @@ def test_lammps_with_non_silica_composition_rejected_at_load():
     d["composition"] = {"formula": "TiO2", "total_atoms": 96}   # growth calc is lammps
     with pytest.raises(ValueError, match="BKS|lammps"):
         load_config(d)
+
+
+def test_lammps_saturation_with_h_rejected_at_load():
+    # M5: saturation adds H, which BKS cannot parameterize -> reject a lammps saturation calc.
+    d = _minimal()
+    d["saturation"] = {"enabled": True}        # saturation calc defaults to reuse growth (lammps)
+    with pytest.raises(ValueError, match="saturation"):
+        load_config(d)
+    # an MLIP saturation calculator is fine
+    d["calculators"]["saturation"] = {"type": "mace", "mace_model_path": "m.model"}
+    assert load_config(d).saturation.enabled is True
+    # saturation disabled -> a lammps-only run still loads
+    d2 = _minimal()
+    d2["saturation"] = {"enabled": False}
+    assert load_config(d2).saturation.enabled is False
+
+
+def test_loaded_substrate_elements_become_spectators(tmp_path):
+    # M2: a loaded substrate's foreign element gets distance/cutoff rows (so growth placement
+    # doesn't KeyError on it) but is not required to be curated and stays out of the per-element
+    # oxidation/CN tables.
+    from ase import Atoms
+    from ase.io import write
+    sub = Atoms("CSiO", positions=[[1, 1, 1], [4, 1, 1], [7, 1, 1]], cell=[20, 20, 20], pbc=True)
+    path = tmp_path / "substrate.vasp"
+    write(str(path), sub, format="vasp")
+
+    d = _minimal()
+    d["structure"] = {"from_file": str(path)}                 # XOR: no 'cell'
+    d["calculators"] = {"growth": {"type": "mace", "mace_model_path": "m.model"}}
+    cfg = load_config(d)
+    assert ("C", "O") in cfg.coordination.cut_offs           # spectator distance present
+    assert "C" in cfg.coordination.d_min_max
+    assert "C" not in cfg.coordination.oxidation             # not forced to be curated
+    assert "C" not in cfg.coordination.max_cn
 
 
 def test_composition_multiple_forms_rejected():
