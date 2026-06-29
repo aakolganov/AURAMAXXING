@@ -112,6 +112,15 @@ def _normalize_cn_variants(spec) -> list:
 
     total = 0.0
     for v in variants:
+        # A CN of 0 (or negative) would be stored as the per-atom max_cn override and then
+        # read back as the "0 = unset" sentinel, silently reverting to the element default;
+        # and a variant oxidation of 0 collides with the same unset sentinel. Reject both up
+        # front so the distribution can't be silently ignored.
+        if v["cn"] <= 0:
+            raise ValueError(f"cn_distr: 'cn' must be a positive integer, got {v['cn']} in {variants!r}")
+        if "oxidation" in v and v["oxidation"] == 0:
+            raise ValueError("cn_distr: a variant 'oxidation' of 0 is not supported "
+                             "(it collides with the unset sentinel); omit it to use the default")
         if v["fraction"] < 0:
             raise ValueError(f"cn_distr: negative fraction in {variants!r}")
         total += v["fraction"]

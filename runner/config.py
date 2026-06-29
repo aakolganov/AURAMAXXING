@@ -161,13 +161,22 @@ def _parse_composition_block(d: dict, where: str) -> dict:
                          f"'counts' (or legacy 'target_ratios'); got {forms}")
     form = forms[0]
 
+    # The total-atoms key must match the form, so a mismatched/extra total key isn't silently
+    # ignored: 'counts' takes neither; legacy 'target_ratios' takes 'target_number_atoms';
+    # the other forms take 'total_atoms'.
+    expected_total = None if form == "counts" else ("target_number_atoms" if form == "target_ratios" else "total_atoms")
+    stray_total = ({"total_atoms", "target_number_atoms"} - {expected_total}) & set(d)
+    if stray_total:
+        raise ValueError(f"{where}: composition form {form!r} does not accept {sorted(stray_total)}"
+                         + (f"; use {expected_total!r}" if expected_total else " (explicit counts need no total)"))
+
     if form == "counts":                           # explicit counts: no total needed
         counts = {str(k): int(v) for k, v in _as_dict(d["counts"], f"{where}.counts").items()}
         if any(v < 0 for v in counts.values()) or sum(counts.values()) == 0:
             raise ValueError(f"{where}.counts: need positive integer atom counts")
         return {"weights": None, "counts": counts, "total": None, "elements": set(counts)}
 
-    total_key = "target_number_atoms" if form == "target_ratios" else "total_atoms"
+    total_key = expected_total
     if total_key not in d:
         raise ValueError(f"{where}: composition form {form!r} needs '{total_key}'")
     total = int(d[total_key])
@@ -474,7 +483,9 @@ def _coord_override_elements(coord_block: Optional[dict]) -> set:
     cut = coord_block.get("cut_offs")
     if isinstance(cut, dict):
         for pair in cut:
-            elems.update(str(pair).split("-"))
+            parts = str(pair).split("-")
+            if len(parts) == 2:                 # ignore malformed keys here; _parse_cut_offs
+                elems.update(parts)             # raises the clear 'Element-Element' error
     return elems
 
 

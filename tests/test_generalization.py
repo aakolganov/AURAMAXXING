@@ -80,8 +80,16 @@ def test_grow_titania_with_covalent_distances(dummy_calc, tmp_path):
 
 
 def test_non_orthogonal_cell_rejected():
-    # growth's grid assumes an orthogonal box; a tilted cell must error at init, not silently
-    # produce a wrong grid / out-of-box placements.
+    # growth's grid assumes an orthogonal box; a meaningfully tilted cell must error at init,
+    # not silently produce a wrong grid / out-of-box placements.
     from base.initialize import initialize_structure_blank
     with pytest.raises(ValueError, match="non-orthogonal"):
         initialize_structure_blank(cell=[[20, 0, 0], [2, 20, 0], [0, 0, 30]])
+
+
+def test_negligible_cell_tilt_accepted():
+    # a relaxed "orthogonal" slab can carry tiny numerical off-diagonal entries; the relative
+    # tolerance must not reject those.
+    from base.initialize import initialize_structure_blank
+    s = initialize_structure_blank(cell=[[20, 1e-4, 0], [0, 20, 0], [0, 0, 30]])
+    assert s is not None

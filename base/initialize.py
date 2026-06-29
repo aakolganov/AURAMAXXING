@@ -14,7 +14,11 @@ def _assert_orthogonal_cell(struct: AmorphousStruc, source: str) -> AmorphousStr
     cell = np.array(struct.atoms.cell)
     if cell.shape == (3, 3):
         off = cell - np.diag(np.diagonal(cell))
-        if np.any(np.abs(off) > 1e-6):
+        # Relative tolerance: ignore numerical noise / negligible tilt on a relaxed slab, but
+        # catch a genuinely tilted cell (which the grid + periodic wrap would mis-handle). The
+        # threshold scales with the cell size so it is meaningful for any box.
+        scale = float(np.max(np.abs(np.diagonal(cell)))) or 1.0
+        if np.any(np.abs(off) > 1e-4 * scale):
             raise ValueError(
                 f"{source}: the cell is non-orthogonal (tilted); growth assumes an orthogonal "
                 f"box (zero off-diagonal cell entries). Off-diagonal entries:\n{off}")

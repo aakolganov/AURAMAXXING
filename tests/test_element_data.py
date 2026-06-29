@@ -12,6 +12,7 @@ from base.element_data import (
     build_element_tables,
     derive_pair_distances,
     element_record,
+    normalize_cn_distr,
 )
 
 
@@ -106,6 +107,19 @@ def test_spectator_elements_get_distances_only():
     # a spectator already among the grown elements is not duplicated/treated specially
     t2 = build_element_tables(["Si", "O"], spectator_elements=["O"])
     assert set(t2["oxidation"]) == {"Si", "O"}
+
+
+def test_cn_distr_rejects_sentinel_collisions():
+    # cn <= 0 and a variant oxidation of 0 collide with the "0 = unset" per-atom sentinel and
+    # would be silently ignored; both must raise.
+    with pytest.raises(ValueError, match="cn"):
+        normalize_cn_distr({"Si": {0: 0.2}})
+    with pytest.raises(ValueError, match="cn"):
+        normalize_cn_distr({"Si": [{"cn": -1, "fraction": 0.2}]})
+    with pytest.raises(ValueError, match="oxidation"):
+        normalize_cn_distr({"Si": [{"cn": 4, "fraction": 0.2, "oxidation": 0}]})
+    # a normal distribution still normalizes fine
+    assert normalize_cn_distr({"Al": {6: 0.2}}) == {"Al": [{"cn": 6, "fraction": 0.2}]}
 
 
 def test_build_element_tables_shapes_and_overrideable_knobs():

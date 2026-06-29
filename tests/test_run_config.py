@@ -58,6 +58,24 @@ def test_cn_distr_rejects_fractions_over_one():
         load_config(d)
 
 
+def test_malformed_cut_off_key_gives_clean_error():
+    d = _minimal()
+    d["coordination"] = {"cut_offs": {"Si-O-x": 2.0}}            # not 'Element-Element'
+    with pytest.raises(ValueError, match="Element-Element"):
+        load_config(d)
+
+
+def test_composition_rejects_mismatched_total_key():
+    d = _minimal()
+    d["composition"] = {"ratio": {"Si": 1, "O": 2}, "target_number_atoms": 99}  # wrong total key for 'ratio'
+    with pytest.raises(ValueError, match="total_atoms|target_number_atoms"):
+        load_config(d)
+    d2 = _minimal()
+    d2["composition"] = {"counts": {"Si": 1, "O": 2}, "total_atoms": 99}        # counts takes no total
+    with pytest.raises(ValueError, match="total"):
+        load_config(d2)
+
+
 def test_cut_offs_parse_to_symmetric_tuples():
     d = _minimal()
     d["coordination"] = {"cut_offs": {"Si-O": 1.95}}
