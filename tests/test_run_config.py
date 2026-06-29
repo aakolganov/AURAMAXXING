@@ -25,16 +25,37 @@ def test_load_minimal_applies_defaults():
     # coordination is derived for the run's element set (SiO2 -> {Si, O, H}); curated CN.
     assert cfg.coordination.max_cn["Si"] == 4
     assert cfg.coordination.oxidation["Si"] == 4 and cfg.coordination.oxidation["O"] == -2
-    assert cfg.coordination.overcoord_policy == {}
+    assert cfg.coordination.cn_distr == {}
 
 
 def test_coordination_merges_onto_defaults():
     d = _minimal()
-    d["coordination"] = {"max_cn": {"Al": 6}, "overcoord_policy": {"Al": {"max_cn": 6, "fraction": 0.2}}}
+    d["coordination"] = {"max_cn": {"Al": 6}, "cn_distr": {"Al": {6: 0.2}}}
     cfg = load_config(d)
     assert cfg.coordination.max_cn["Al"] == 6     # overridden
     assert cfg.coordination.max_cn["Si"] == 4     # default preserved
-    assert cfg.coordination.overcoord_policy == {"Al": {"max_cn": 6, "fraction": 0.2}}
+    # cn_distr is stored normalized to the list form
+    assert cfg.coordination.cn_distr == {"Al": [{"cn": 6, "fraction": 0.2}]}
+
+
+def test_cn_distr_accepts_forms_and_oxidation():
+    d = _minimal()
+    d["coordination"] = {"cn_distr": {
+        "Si": 4,                                              # single CN
+        "Al": {4: 0.8, 6: 0.2},                              # {cn: fraction} mapping
+        "Fe": [{"cn": 6, "fraction": 0.9}, {"cn": 4, "fraction": 0.1, "oxidation": 2}],  # list + ox
+    }}
+    cfg = load_config(d)
+    assert cfg.coordination.cn_distr["Si"] == [{"cn": 4, "fraction": 1.0}]
+    assert cfg.coordination.cn_distr["Al"] == [{"cn": 4, "fraction": 0.8}, {"cn": 6, "fraction": 0.2}]
+    assert cfg.coordination.cn_distr["Fe"][1] == {"cn": 4, "fraction": 0.1, "oxidation": 2}
+
+
+def test_cn_distr_rejects_fractions_over_one():
+    d = _minimal()
+    d["coordination"] = {"cn_distr": {"Al": {4: 0.8, 6: 0.5}}}   # sums to 1.3
+    with pytest.raises(ValueError, match="cn_distr"):
+        load_config(d)
 
 
 def test_cut_offs_parse_to_symmetric_tuples():

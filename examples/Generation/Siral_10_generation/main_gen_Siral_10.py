@@ -15,11 +15,11 @@ from base.config import CoordinationConfig
 from base.limits import make_limit_flat, make_limits_fourier, fix_limits
 from growth.new_growth import grow_structure, finalize_structure
 from interfaces.LAMMPS_Interface import LMPInterface
-from default_constants import SIRAL_OVERCOORD
+from default_constants import SIRAL_CN_DISTR
 
 # Allow ~20% of Al to grow octahedral (CN up to 6); the rest stay tetrahedral (CN 4).
 # Applies to atoms grown on top; the loaded substrate keeps its element-default limits.
-COORD_CONFIG = CoordinationConfig(overcoord_policy=SIRAL_OVERCOORD)
+COORD_CONFIG = CoordinationConfig(cn_distr=SIRAL_CN_DISTR)
 
 # 1 Si : 4.5 Al, with O for a charge-neutral oxide: (10*4 + 45*3)/2 = 87.5 O.
 # Scaled to integers: Si:20, Al:90, O:175 (target_ratios are relative weights).

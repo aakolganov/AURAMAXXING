@@ -21,7 +21,7 @@ import yaml
 from ase.formula import Formula
 
 from base.config import CoordinationConfig
-from base.element_data import OXIDE_ELEMENTS, build_element_tables, element_record
+from base.element_data import OXIDE_ELEMENTS, build_element_tables, element_record, normalize_cn_distr
 
 
 # --- validation helpers -------------------------------------------------------------
@@ -467,7 +467,7 @@ def _coord_override_elements(coord_block: Optional[dict]) -> set:
     if not coord_block:
         return set()
     elems: set = set()
-    for key in ("max_cn", "min_cn", "oxidation", "overcoord_policy"):
+    for key in ("max_cn", "min_cn", "oxidation", "cn_distr"):
         sub = coord_block.get(key)
         if isinstance(sub, dict):
             elems.update(str(k) for k in sub)
@@ -502,6 +502,21 @@ def _parse_distance_knobs(raw, where: str) -> dict:
     return {k: float(v) for k, v in d.items()}
 
 
+def _parse_cn_distr(raw, where: str) -> dict:
+    """Validate + normalize the per-element coordination-number distribution. Each element maps
+    to a single CN, a ``{cn: fraction}`` mapping, or a list of ``{cn, fraction, oxidation?}``;
+    a fraction of that element is grown at each CN (and optional oxidation), the remainder at
+    the curated default."""
+    d = _as_dict(raw, where)
+    out = {}
+    for el, spec in d.items():
+        try:
+            out[str(el)] = normalize_cn_distr({el: spec})[str(el)]
+        except ValueError as exc:
+            raise ValueError(f"{where}.{el}: {exc}")
+    return out
+
+
 def _validate_cutoff_overrides(overrides: dict, cfg: CoordinationConfig, where: str) -> None:
     """A raw cut_off override must not fall below the derived bond-sampling upper bound for the
     pair, or a sampled bond could be committed yet scored as non-bonded (the coherence bug).
@@ -523,7 +538,7 @@ def _build_coordination(d: Optional[dict], where: str, *, elements, oxidation) -
     element set, then apply the partial user overrides (same merge convention as before)."""
     d = _as_dict(d, where) if d is not None else None
     if d is not None:
-        _check_keys(d, {"max_cn", "min_cn", "cut_offs", "overcoord_policy", "oxidation", "distance"}, where)
+        _check_keys(d, {"max_cn", "min_cn", "cut_offs", "cn_distr", "oxidation", "distance"}, where)
     distance_knobs = _parse_distance_knobs(d["distance"], f"{where}.distance") if d and "distance" in d else None
     max_cn_over = ({str(k): int(v) for k, v in _as_dict(d["max_cn"], f"{where}.max_cn").items()}
                    if d and "max_cn" in d else {})
@@ -537,8 +552,8 @@ def _build_coordination(d: Optional[dict], where: str, *, elements, oxidation) -
         sample_dist=tables["sample_dist"], d_min_max=tables["d_min_max"],
         oxidation=tables["oxidation"],
     )
-    if d and "overcoord_policy" in d:
-        cfg.overcoord_policy.update(_as_dict(d["overcoord_policy"], f"{where}.overcoord_policy"))
+    if d and "cn_distr" in d:
+        cfg.cn_distr.update(_parse_cn_distr(d["cn_distr"], f"{where}.cn_distr"))
     if d and "cut_offs" in d:
         overrides = _parse_cut_offs(d["cut_offs"], f"{where}.cut_offs")
         _validate_cutoff_overrides(overrides, cfg, f"{where}.cut_offs")

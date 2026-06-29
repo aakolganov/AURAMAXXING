@@ -84,6 +84,49 @@ DEFAULT_DISTANCE_KNOBS: dict[str, float] = {
 }
 
 
+def _normalize_cn_variants(spec) -> list:
+    """Normalize one element's CN distribution into a list of ``{cn, fraction[, oxidation]}``.
+
+    Accepts a single int (the only expected CN), a ``{cn: fraction}`` mapping, or a list of
+    ``{cn, fraction, oxidation?}`` dicts. Validates non-negative fractions summing to <= 1
+    (any shortfall falls back to the element default CN)."""
+    if isinstance(spec, bool):
+        raise ValueError(f"cn_distr entry must be an int / mapping / list, not a bool: {spec!r}")
+    if isinstance(spec, int):
+        variants = [{"cn": int(spec), "fraction": 1.0}]
+    elif isinstance(spec, dict):
+        variants = [{"cn": int(cn), "fraction": float(fr)} for cn, fr in spec.items()]
+    elif isinstance(spec, (list, tuple)):
+        variants = []
+        for entry in spec:
+            if not isinstance(entry, dict) or "cn" not in entry or "fraction" not in entry:
+                raise ValueError(f"cn_distr list entry must have 'cn' and 'fraction': {entry!r}")
+            v = {"cn": int(entry["cn"]), "fraction": float(entry["fraction"])}
+            if entry.get("oxidation") is not None:
+                v["oxidation"] = int(entry["oxidation"])
+            variants.append(v)
+    else:
+        raise ValueError(
+            f"cn_distr entry must be an int, a {{cn: fraction}} mapping, or a list of "
+            f"{{cn, fraction, oxidation}}; got {type(spec).__name__}")
+
+    total = 0.0
+    for v in variants:
+        if v["fraction"] < 0:
+            raise ValueError(f"cn_distr: negative fraction in {variants!r}")
+        total += v["fraction"]
+    if total > 1.0 + 1e-9:
+        raise ValueError(f"cn_distr: fractions sum to {total:.3f} > 1.0 in {variants!r}")
+    return variants
+
+
+def normalize_cn_distr(cn_distr) -> dict:
+    """Normalize a per-element CN distribution mapping to the canonical
+    ``{element: [{cn, fraction[, oxidation]}, ...]}`` form. Idempotent, so it is safe to apply
+    to already-normalized input (e.g. config-parsed) and to raw user input alike."""
+    return {str(el): _normalize_cn_variants(spec) for el, spec in (cn_distr or {}).items()}
+
+
 def element_record(symbol: str) -> dict:
     """Curated defaults for ``symbol`` (oxidation/max_cn/min_cn). Raises a clear error,
     naming the element, when it is not in the curated table -- the caller is expected to add

@@ -14,10 +14,10 @@ from base.config import CoordinationConfig
 from base.limits import make_limit_flat, make_limits_fourier, fix_limits
 from growth.new_growth import grow_structure, finalize_structure
 from interfaces.MACE_interface import MACEInterface
-from default_constants import SIRAL_OVERCOORD
+from default_constants import SIRAL_CN_DISTR
 
 # Allow ~20% of Al to grow octahedral (CN up to 6); the rest stay tetrahedral (CN 4).
-COORD_CONFIG = CoordinationConfig(overcoord_policy=SIRAL_OVERCOORD)
+COORD_CONFIG = CoordinationConfig(cn_distr=SIRAL_CN_DISTR)
 
 TARGET_RATIOS = {"Si": 4, "Al": 2, "O": 11}   # see main_gen_Siral_70.py for the stoichiometry
 TARGET_ATOMS = 440

@@ -13,10 +13,11 @@ from default_constants import (
     pair_cutoffs,
     default_oxidation,
     default_min_cn,
-    default_overcoord_policy,
+    default_cn_distr,
     sample_dist as default_sample_dist,
     d_min_max as default_d_min_max,
 )
+from .element_data import normalize_cn_distr
 from .limits import Limits
 from .config import CoordinationConfig
 
@@ -28,13 +29,18 @@ class AmorphousStruc:
     cut_offs: dict = field(default_factory=pair_cutoffs.copy)
     sample_dist: dict = field(default_factory=default_sample_dist.copy)
     d_min_max: dict = field(default_factory=default_d_min_max.copy)
-    overcoord_policy: dict = field(default_factory=default_overcoord_policy.copy)
+    cn_distr: dict = field(default_factory=default_cn_distr.copy)
     oxidation: dict = field(default_factory=default_oxidation.copy)
     rng: np.random.Generator = field(default_factory=np.random.default_rng)
     limits: Limits = field(default=None, init=False, repr=False)
-    
+
     _graph: nx.Graph | None = field(default=None, init=False, repr=False)
     _need_graph_update: bool = field(default=True, init=False, repr=False)
+
+    def __post_init__(self):
+        # Accept any supported cn_distr input form (int / {cn: fraction} / list of dicts) and
+        # store the canonical normalized list form for the sampler. Idempotent.
+        self.cn_distr = normalize_cn_distr(self.cn_distr)
 
 
     def __len__(self):
@@ -101,7 +107,7 @@ class AmorphousStruc:
         """Per-atom maximum coordination number.
 
         Combines the per-element ``max_cn`` defaults with any per-atom overrides
-        stored in ``atoms.arrays["max_cn"]`` (set by the overcoordination policy).
+        stored in ``atoms.arrays["max_cn"]`` (set from ``cn_distr``).
         A stored value of 0 means "unset" and falls back to the element default, so
         ASE's zero-padding of freshly appended atoms is harmless. When no overrides
         exist the result is exactly the per-element defaults (back-compatible).
@@ -120,7 +126,7 @@ class AmorphousStruc:
     def min_cn_array(self) -> np.ndarray:
         """Per-atom minimum coordination number (per-element only).
 
-        The overcoordination policy relaxes the upper bound only; the
+        ``cn_distr`` sets the per-atom upper (max) coordination only; the
         under-coordination floor that drives saturation stays per-element.
         """
         symbols = np.array(self.symbols)
@@ -128,34 +134,50 @@ class AmorphousStruc:
         return np.array([self.min_cn.get(s, 0) for s in symbols], dtype=int)
 
 
-    def _assign_max_cn(self, symbol: str) -> int:
-        """Draw a per-atom max-CN override for a newly created atom.
+    def _assign_cn_variant(self, symbol: str) -> tuple[int, int]:
+        """Assign a new atom's coordination number (and oxidation) from the element's
+        ``cn_distr``.
 
-        Returns the elevated max with probability ``fraction`` (Bernoulli draw on
-        ``self.rng``), else 0 (use the element default). Short-circuits with NO rng
-        draw when the policy is empty or has no entry for ``symbol`` -- this is what
-        keeps policy-off runs byte-for-byte identical to before.
+        Returns ``(max_cn_tag, oxidation_tag)``; 0 means "unset, use the element default".
+        Draws one categorical sample over the distribution's variants; the CN and oxidation
+        come from the SAME draw, so a variant atom gets both together. Short-circuits with NO
+        rng draw when the element has no distribution -- this keeps distribution-free runs
+        byte-for-byte identical. A draw beyond the variants' cumulative fraction (sum < 1)
+        falls back to the element default.
         """
-        policy = self.overcoord_policy.get(symbol)
-        if not policy or policy.get("fraction", 0.0) <= 0.0:
-            return 0
-        if self.rng.random() < policy["fraction"]:
-            return int(policy["max_cn"])
-        return 0
+        variants = self.cn_distr.get(symbol)
+        if not variants:
+            return 0, 0
+        u = self.rng.random()
+        cum = 0.0
+        for v in variants:
+            cum += v["fraction"]
+            if u < cum:
+                return int(v["cn"]), int(v.get("oxidation", 0))
+        return 0, 0
 
 
-    def apply_overcoord_policy(self) -> None:
-        """(Re)assign per-atom max-CN overrides for all current atoms.
+    @property
+    def _distr_has_oxidation(self) -> bool:
+        """True when any cn_distr variant carries an ``oxidation`` -- only then is the per-atom
+        ``oxidation`` array materialised, so distributions without it stay byte-for-byte as
+        before."""
+        return any("oxidation" in v
+                   for variants in self.cn_distr.values() for v in variants)
 
-        Tags every atom via the Bernoulli policy and stores the result in
-        ``atoms.arrays["max_cn"]``. No-op when the policy is empty. Use this to opt
-        a loaded structure into the policy after seeding (``set_seed``); grown atoms
-        are tagged incrementally in ``commit_atom`` instead.
+
+    def apply_cn_distr(self) -> None:
+        """(Re)assign per-atom coordination (and oxidation) overrides for all current atoms
+        from ``cn_distr`` and store them in ``atoms.arrays``. No-op when ``cn_distr`` is empty.
+        Use this to opt a loaded structure into the distribution after seeding (``set_seed``);
+        grown atoms are assigned incrementally in ``commit_atom`` instead.
         """
-        if not self.overcoord_policy:
+        if not self.cn_distr:
             return
-        arr = np.array([self._assign_max_cn(s) for s in self.symbols], dtype=int)
-        self.atoms.set_array("max_cn", arr)
+        pairs = [self._assign_cn_variant(s) for s in self.symbols]
+        self.atoms.set_array("max_cn", np.array([p[0] for p in pairs], dtype=int))
+        if self._distr_has_oxidation:
+            self.atoms.set_array("oxidation", np.array([p[1] for p in pairs], dtype=int))
 
 
     def get_atom_count(self, atom_type: str) -> int:
@@ -174,15 +196,21 @@ class AmorphousStruc:
         self.atoms.append(Atom(atom_type, position=position))
         new_idx = len(self.atoms) - 1
 
-        # Tag the new atom with its max-CN override per the overcoordination policy.
-        # ASE pads an existing per-atom array with 0 on append, so we overwrite that
-        # slot; if the array doesn't exist yet (e.g. first atom of a blank struct) we
-        # create it. Guarded by a non-empty policy so policy-off runs are unchanged.
-        if self.overcoord_policy:
-            tag = self._assign_max_cn(atom_type)
+        # Assign the new atom's CN (and oxidation) from cn_distr. ASE pads an existing per-atom
+        # array with 0 on append, so we overwrite that slot; if the array doesn't exist yet
+        # (e.g. first atom of a blank struct) we create it. Guarded by a non-empty cn_distr so
+        # distribution-off runs are unchanged.
+        if self.cn_distr:
+            mx_tag, ox_tag = self._assign_cn_variant(atom_type)
             if "max_cn" not in self.atoms.arrays:
                 self.atoms.set_array("max_cn", np.zeros(len(self.atoms), dtype=int))
-            self.atoms.arrays["max_cn"][new_idx] = tag
+            self.atoms.arrays["max_cn"][new_idx] = mx_tag
+            # The variant oxidation comes from the same draw; only materialised when a
+            # distribution uses 'oxidation', so CN-only distributions are unchanged.
+            if self._distr_has_oxidation:
+                if "oxidation" not in self.atoms.arrays:
+                    self.atoms.set_array("oxidation", np.zeros(len(self.atoms), dtype=int))
+                self.atoms.arrays["oxidation"][new_idx] = ox_tag
 
         if self._graph is not None and not self._need_graph_update:
             self._add_atom_to_graph(new_idx)
@@ -218,9 +246,11 @@ class AmorphousStruc:
         # (e.g. an Al allowed CN 6) can't carry over to a different element. 0 falls
         # back to the new element's default. (Today move_atom only replaces in place
         # with the same symbol, so this is defensive.)
-        override = self.atoms.arrays.get("max_cn")
-        if override is not None and self.atoms[index].symbol != new_atom_type:
-            override[index] = 0
+        if self.atoms[index].symbol != new_atom_type:
+            for key in ("max_cn", "oxidation"):
+                arr = self.atoms.arrays.get(key)
+                if arr is not None:
+                    arr[index] = 0
         self.atoms.positions[index] = new_position
         self.atoms.numbers[index] = atomic_numbers[new_atom_type]
         self._need_graph_update = True
@@ -297,17 +327,30 @@ class AmorphousStruc:
         default, or an explicit ``defined_charges`` override). Raises a clear error, naming
         the element, when an element present in the structure has no oxidation state."""
         table = self.oxidation if defined_charges is None else defined_charges
-        atom_counts = Counter(self.atoms.get_chemical_symbols())
+        symbols = self.atoms.get_chemical_symbols()
 
-        net_charge = 0
-        for at, count in atom_counts.items():
+        def _element_charge(at: str) -> int:
             try:
-                net_charge += count * table[at]
+                return table[at]
             except KeyError:
                 raise ValueError(
                     f"charge(): no oxidation state for element {at!r}; add it to the "
                     f"structure's oxidation table (or the curated base/element_data table)."
                 ) from None
+
+        # Per-atom oxidation overrides (minority variants assigned by cn_distr) are
+        # honoured only against the structure's own table; an explicit defined_charges applies
+        # uniformly. 0 in the override array means "unset -> use the element default".
+        override = None if defined_charges is not None else self.atoms.arrays.get("oxidation")
+        if override is None:
+            # Fast path (no variants): per-element sum, unchanged behaviour.
+            atom_counts = Counter(symbols)
+            return sum(count * _element_charge(at) for at, count in atom_counts.items())
+
+        net_charge = 0
+        for i, at in enumerate(symbols):
+            q = int(override[i])
+            net_charge += q if q != 0 else _element_charge(at)
         return net_charge
 
 
@@ -342,8 +385,8 @@ def AmorphousStruc_factory(
     If neither is provided, an empty structure is created.
 
     `config` (CoordinationConfig) sets the coordination limits, cutoffs and the
-    overcoordination policy. When omitted, the AmorphousStruc field defaults apply,
-    reproducing the previous behaviour.
+    coordination-number distribution (cn_distr). When omitted, the AmorphousStruc field
+    defaults apply, reproducing the previous behaviour.
     """
     # If the user passes in a Generator, use it; otherwise build one from the seed.
     if isinstance(seed, np.random.Generator):
@@ -378,7 +421,7 @@ def AmorphousStruc_factory(
             cut_offs=config.cut_offs.copy(),
             sample_dist=config.sample_dist.copy(),
             d_min_max=config.d_min_max.copy(),
-            overcoord_policy=config.overcoord_policy.copy(),
+            cn_distr=config.cn_distr.copy(),
             oxidation=config.oxidation.copy(),
         )
 
