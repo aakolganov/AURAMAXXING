@@ -1,0 +1,36 @@
+# Amorphous TiO2 slab -- a covalent (network-forming) oxide beyond Si/Al, grown and saturated
+# with the data-driven covalent-radii model + an MLIP. Ti is a tetrahedral/octahedral network
+# former (CN 4-6), so ~20% of Ti is grown octahedral via cn_distr. BKS is Si/Al/O-only, so this
+# composition (and the H from saturation) requires a MACE/UMA calculator.
+#
+#   python -m runner --dry-run examples/config/tio2.yaml   (validate only)
+#   python -m runner examples/config/tio2.yaml
+
+structure:
+  cell: [18.0, 18.0, 30.0]
+
+composition:
+  formula: TiO2
+  total_atoms: 96
+
+limits:
+  bottom: {type: flat,    z: 10.0}
+  top:    {type: fourier, z_av: 20.0, alpha: 0.3}
+  fix: bottom
+
+coordination:
+  cn_distr:
+    Ti: {6: 0.2}             # ~20% of Ti octahedral (CN 6); the rest at the curated CN 4
+
+calculators:
+  growth:     {type: uma, uma_model_path: uma-s-1p2, task: omat, device: cuda}
+  saturation: {type: uma, uma_model_path: uma-s-1p2, task: omat, device: cuda}
+
+finalize: {fmax: 0.1, max_steps: 200}
+saturation:        {enabled: true}
+charge_correction: {enabled: true}
+
+run:
+  seeds: [0, 1]
+  output_dir: output/tio2
+  output_format: vasp

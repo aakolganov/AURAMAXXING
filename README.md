@@ -62,6 +62,20 @@ other element — and, because saturation adds H, it can never be the saturation
 Chemical saturation/charge-correction is composition-general too (see
 [Saturation capping modes](#saturation-capping-modes)).
 
+**Scope — covalent network oxides.** The distance/coordination model uses **covalent** radii and
+a network-former coordination picture (e.g. O at CN 2), which fits *covalent network oxides* well
+— B, Al, Si, P, Ge, Ga, Ti, Zr, Hf, Nb, V, Fe, Zn, Sn, and silica(-aluminas). It is **not**
+intended for strongly **ionic** oxides (alkaline-earth Mg/Ca/Sr/Ba, rare-earth Y/La/Ce): there
+the right bond lengths come from **ionic** radii and O is 4–6-coordinate, so the covalent-radii
+cutoffs over-count cation–cation contacts and O coordination. Use the curated covalent formers
+(or supply `coordination` overrides) rather than relying on the defaults for ionic systems.
+
+**Substrate-loaded growth.** A run can start from a loaded surface (`structure.from_file`) and
+grow a film on top: anchor the growth region above it with the `surface` / `offset` limit types,
+and `total_atoms` counts the substrate atoms too. A POSCAR's Selective Dynamics (F F F) is read
+into a `FixAtoms` constraint that keeps the substrate frozen through growth, saturation and the
+relax. See `examples/config/gAl2O3_substrate.yaml` (silica film on bare γ-Al₂O₃(110)).
+
 ## Installation
 
 Python ≥ 3.10. Install the dependencies:
@@ -372,6 +386,10 @@ bottom limit).
 
 - `examples/config/sio2.yaml` — amorphous SiO₂ (BKS), single structure.
 - `examples/config/siral70.yaml` — Si/Al with a MACE saturation backend and a seed × roughness sweep.
+- `examples/config/tio2.yaml` — amorphous TiO₂ (a covalent oxide beyond Si/Al), grown + saturated
+  with UMA and a `cn_distr` for octahedral Ti.
+- `examples/config/gAl2O3_substrate.yaml` — a silica film grown on a loaded, frozen γ-Al₂O₃(110)
+  substrate (`from_file` + `surface`/`offset` limits).
 - `examples/config/sio2_fluorine_cap.yaml`, `sio2_sodium_cap.yaml`, `sio2_naf_cap.yaml` —
   the three [saturation capping modes](#saturation-capping-modes) (F on cations, Na on anions,
   a net-neutral NaF pair).

@@ -1,0 +1,36 @@
+# Grow an amorphous silica (SiO2) film ON TOP of a bare gamma-Al2O3(110) surface loaded from a
+# POSCAR (a silica-on-alumina interface). The substrate uses Selective Dynamics (F F F) on its
+# lower layers, which ASE reads into a FixAtoms constraint -- it stays frozen through growth,
+# saturation, slicing and the final relax. The growth region is anchored just above the loaded
+# surface via the 'surface' / 'offset' limit types, and `total_atoms` counts the substrate atoms
+# too (the 240-atom Al2O3 here), so growth stops once the slab reaches that total -- i.e. it adds
+# ~60 SiO2 atoms on top. The substrate supplies the Al; the film is the Si/O.
+#
+# Run from the repo root so the from_file path resolves:
+#   python -m runner --dry-run examples/config/gAl2O3_substrate.yaml   (validate only)
+#   python -m runner examples/config/gAl2O3_substrate.yaml
+
+structure:
+  from_file: examples/Generation/Siral_10_generation/POSCAR_bare_gAl_110   # 96 Al + 144 O, fixed
+
+composition:
+  ratio: {Si: 1, O: 2}              # SiO2 film (relative weights); already charge-neutral
+  total_atoms: 300                  # total incl. the 240 substrate atoms -> ~60 SiO2 grown on top
+
+limits:
+  bottom: {type: surface}                      # at the loaded surface top
+  top:    {type: fourier, offset: 12.0, alpha: 0.3}   # rough ceiling 12 A above the surface
+  fix: bottom
+
+calculators:
+  growth:     {type: uma, uma_model_path: uma-s-1p2, task: omat, device: cuda}
+  saturation: {type: uma, uma_model_path: uma-s-1p2, task: omat, device: cuda}
+
+finalize: {fmax: 0.1, max_steps: 200}
+saturation:        {enabled: true}
+charge_correction: {enabled: true}
+
+run:
+  seeds: [0]
+  output_dir: output/gAl2O3_substrate
+  output_format: vasp

@@ -104,6 +104,54 @@ def test_statistics_per_structure_off_keeps_pooled(tmp_path, monkeypatch):
     assert (tmp_path / "out" / "coordination.png").exists()
 
 
+# --- substrate-loaded growth (load a fixed surface, grow + saturate on top) -----------
+
+def test_substrate_loaded_growth_keeps_substrate_frozen(tmp_path, monkeypatch):
+    # Load a small fixed Al/O substrate (Selective Dynamics -> FixAtoms), anchor the growth
+    # region just above it, grow + saturate on top with the LJ dummy, and assert the substrate
+    # atoms never move (frozen) while new atoms are added above. Exercises the same loaded-surface
+    # path as the production gamma-Al2O3 runs, cheaply. (Charge-correction off so the atom order
+    # is preserved -- correct_charge sorts -- making the per-index frozen check exact.)
+    import numpy as np
+    from ase import Atoms
+    from ase.constraints import FixAtoms
+    from ase.io import write, read
+    from tests.dummy_interface import DummyInterface
+
+    sub = Atoms("Al4O4",
+                positions=[[3, 3, 4.0], [9, 3, 4.0], [3, 9, 4.0], [9, 9, 4.0],
+                           [6, 3, 5.5], [3, 6, 5.5], [9, 6, 5.5], [6, 9, 5.5]],
+                cell=[12.0, 12.0, 24.0], pbc=True)
+    sub.set_constraint(FixAtoms(indices=list(range(len(sub)))))
+    poscar = tmp_path / "substrate.vasp"
+    write(str(poscar), sub, format="vasp")
+    sub_pos = sub.get_positions().copy()
+
+    monkeypatch.setattr("runner.runner.build_calculator",
+                        lambda spec: DummyInterface(dump_path=str(tmp_path / "d")))
+    cfg = load_config({
+        "structure": {"from_file": str(poscar)},
+        "composition": {"ratio": {"Si": 1, "O": 2}, "total_atoms": len(sub) + 9},
+        "limits": {"bottom": {"type": "surface"},                       # at the substrate top
+                   "top": {"type": "fourier", "offset": 6.0, "alpha": 1.0}, "fix": "bottom"},
+        "calculators": {"growth": {"type": "mace", "mace_model_path": "m"},
+                        "saturation": {"type": "mace", "mace_model_path": "m"}},
+        "finalize": {"fmax": 0.5, "max_steps": 10},
+        "saturation": {"enabled": True},
+        "charge_correction": {"enabled": False},
+        "statistics": {"enabled": False},
+        "run": {"seeds": [0], "output_dir": str(tmp_path / "out")},
+    })
+    written = run_from_config(cfg)
+    assert len(written) == 1
+    atoms = read(str(written[0]))
+    assert len(atoms) > len(sub)                                        # grew on top
+    # the substrate (first len(sub) atoms) is frozen -- positions unchanged
+    assert np.allclose(atoms.get_positions()[:len(sub)], sub_pos, atol=1e-6)
+    # and stayed Al/O (not overwritten by grown Si)
+    assert atoms.get_chemical_symbols()[:len(sub)] == list(sub.get_chemical_symbols())
+
+
 # --- saturation capping-mode wiring --------------------------------------------------
 
 def _sat_cfg(tmp_path, sat):
