@@ -60,14 +60,14 @@ def test_element_O_nearest_distance():
     assert "O" not in m["element_O_distance"]    # O is the anion, not a subject here
 
 
-def test_saturation_oh_counting():
-    # Si-O-H chain (one OH on Si) + a bare O with an H (anion H, not an OH "group").
+def test_saturation_cap_counting():
+    # Si-O-H chain: the H is a monovalent cap (bond O-H), and the O is a hydroxyl cap on Si.
     s = AmorphousStruc_factory(
         symbols=["Si", "O", "H"], positions=[[5, 5, 5], [6.6, 5, 5], [7.5, 5, 5]],
         cell=[CELL] * 3, pbc=True, seed=0)
     m = analyze_structure(s, is_saturation=True)
-    assert m["saturation"]["oh_distances"][0] == pytest.approx(0.9, abs=1e-6)
-    assert m["saturation"]["oh_per_element"]["Si"] == [1]
+    assert m["saturation"]["cap_distances"]["O-H"][0] == pytest.approx(0.9, abs=1e-6)
+    assert m["saturation"]["caps_per_cation"]["Si"] == [1]
 
 
 def test_edge_cases_do_not_crash():

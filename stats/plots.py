@@ -13,7 +13,8 @@ style.apply_style()
 import matplotlib.pyplot as plt   # noqa: E402
 import numpy as np                # noqa: E402
 
-_ELEMENT_COLORS = {"Si": "tab:blue", "Al": "tab:orange", "O": "tab:red", "H": "tab:green"}
+_ELEMENT_COLORS = {"Si": "tab:blue", "Al": "tab:orange", "O": "tab:red", "H": "tab:green",
+                   "F": "tab:purple", "Cl": "tab:olive", "Na": "tab:cyan"}
 
 
 def _color(el):
@@ -108,34 +109,38 @@ def plot_tau4(metrics: dict, path: Path):
     _save(fig, path)
 
 
-def plot_oh_distance(metrics: dict, path: Path):
+def plot_cap_distance(metrics: dict, path: Path):
     fig, ax = plt.subplots(figsize=(7, 4))
-    d = (metrics.get("saturation") or {}).get("oh_distances", [])
-    if not d:
+    data = {label: v for label, v in
+            (metrics.get("saturation") or {}).get("cap_distances", {}).items() if v}
+    if not data:
         _empty(ax)
     else:
-        ax.hist(d, bins=30, color=_color("H"), alpha=0.8)
-    ax.set_xlabel("O–H distance (Å)")
+        for label in sorted(data):
+            cap_el = label.split("-")[-1]   # colour by the cap element (O-H -> H, Si-F -> F)
+            ax.hist(data[label], bins=30, alpha=0.6, label=label, color=_color(cap_el))
+        ax.legend(title="cap bond")
+    ax.set_xlabel("cap bond distance (Å)")
     ax.set_ylabel("count")
-    ax.set_title("O–H distance distribution")
+    ax.set_title("Saturation cap bond-length distribution")
     _save(fig, path)
 
 
-def plot_oh_per_element(metrics: dict, path: Path):
+def plot_caps_per_cation(metrics: dict, path: Path):
     fig, ax = plt.subplots(figsize=(7, 4))
-    per = (metrics.get("saturation") or {}).get("oh_per_element", {})
+    per = (metrics.get("saturation") or {}).get("caps_per_cation", {})
     per = {el: v for el, v in per.items() if v}
     if not per:
         _empty(ax)
     else:
-        max_oh = max(max(v) for v in per.values())
-        bins = np.arange(0, max_oh + 2) - 0.5
+        max_caps = max(max(v) for v in per.values())
+        bins = np.arange(0, max_caps + 2) - 0.5
         elements = sorted(per)
         ax.hist([per[el] for el in elements], bins=bins,
                 label=elements, color=[_color(el) for el in elements])
-        ax.set_xticks(range(0, int(max_oh) + 1))
+        ax.set_xticks(range(0, int(max_caps) + 1))
         ax.legend(title="element")
-    ax.set_xlabel("number of –OH groups on the atom")
+    ax.set_xlabel("number of capping groups on the atom")
     ax.set_ylabel("count")
-    ax.set_title("–OH groups per cation")
+    ax.set_title("Capping groups per cation")
     _save(fig, path)

@@ -5,7 +5,7 @@ from base.amorphous_structure import AmorphousStruc_factory
 from stats import write_report, write_pooled_report, analyze_structure
 
 GEN_PNGS = {"coordination.png", "homo_element_distance.png", "element_O_distance.png", "tau4.png"}
-SAT_PNGS = GEN_PNGS | {"oh_distance.png", "oh_per_element.png"}
+SAT_PNGS = GEN_PNGS | {"cap_distance.png", "caps_per_cation.png"}
 
 
 def _struct():

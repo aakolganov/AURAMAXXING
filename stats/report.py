@@ -13,8 +13,8 @@ _FIGURES = [
     ("homo_element_distance.png", plots.plot_homo_distance, False),
     ("element_O_distance.png", plots.plot_element_O, False),
     ("tau4.png", plots.plot_tau4, False),
-    ("oh_distance.png", plots.plot_oh_distance, True),
-    ("oh_per_element.png", plots.plot_oh_per_element, True),
+    ("cap_distance.png", plots.plot_cap_distance, True),
+    ("caps_per_cation.png", plots.plot_caps_per_cation, True),
 ]
 
 
