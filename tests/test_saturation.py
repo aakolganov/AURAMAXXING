@@ -60,11 +60,12 @@ def test_correct_charge_noop_on_neutral(make_struct):
 def test_correct_charge_terminates_when_unsatisfiable(make_struct):
     from saturation.new_sat import correct_charge
     # a lone Si is charged (+4) but has no anion / tetrahedral site to attach to,
-    # so correct_charge cannot neutralise it -- it must stop, not loop forever.
+    # so correct_charge cannot neutralise it. It must stop (not loop forever) AND must
+    # not silently ship a charged slab -- it raises rather than returning charged.
     s = make_struct(["Si"], [[10, 10, 10]], cell=(20.0, 20.0, 20.0))
     assert s.charge() != 0
-    correct_charge(s, max_iterations=50)   # returns via the no-candidate / cap guard
-    assert isinstance(s.charge(), (int, float))
+    with pytest.raises(ValueError, match="could not neutralise"):
+        correct_charge(s, max_iterations=50)
 
 
 # --- isolated atoms must not crash charge-correction's move selection -------------
@@ -127,13 +128,17 @@ def test_correct_charge_neutralises_negative_slab(make_struct):
     assert len(s) > n0              # caps were actually added
 
 
-def test_correct_charge_neutralises_positive_slab(make_struct):
+@pytest.mark.parametrize("seed", range(10))
+def test_correct_charge_neutralises_positive_slab(make_struct, seed):
     from saturation.new_sat import correct_charge
     # An over-coordinated O bonded to three Si (a tricluster): net charge 3*(+4) + (-2) = +10.
     # correct_charge adds OH groups (net -1 each) until neutral.
+    # Swept over seeds: seed 5 used to *overshoot* zero (a move orphaned a +1 H that the
+    # prune deleted on top of the -1 OH cap, so a step jumped -2 to charge -1, then stuck)
+    # and silently shipped a charged slab. The revert-on-overshoot loop must reach exactly 0.
     s = make_struct(["O", "Si", "Si", "Si"],
                     [[7, 7, 7], [8.6, 7, 7], [5.4, 7, 7], [7, 8.6, 7]],
-                    cell=(16.0, 16.0, 16.0))
+                    cell=(16.0, 16.0, 16.0), seed=seed)
     assert s.charge() == 10
     correct_charge(s, max_iterations=200)
     assert s.charge() == 0

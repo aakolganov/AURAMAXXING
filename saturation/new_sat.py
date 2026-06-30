@@ -222,20 +222,28 @@ def correct_charge(
     ):
     """ Creates a charge neutral surface through adding H and OH until correct. Add to over-coordinated atoms. Does not Optimize structure.
 
-    Each iteration changes the net formal charge by one unit toward zero, so a
-    neutral structure is normally reached in |charge| steps. `max_iterations` caps
-    the loop so it can never run away (e.g. if placement can never satisfy the
-    charge balance); a warning is printed if the cap is hit while still charged.
+    Each iteration breaks one bond and re-caps with an H/OH group, which should change
+    the net formal charge by one unit toward zero. It is not guaranteed to, though:
+    ``_prune_orphans_from_move`` can delete a charged atom the move orphaned (e.g. a -2 O
+    or a +1 H), so a single iteration can jump the charge by more than one and even
+    *overshoot* past zero -- after which there may be no candidate left to come back, and
+    the slab would ship charged. To stay robust we therefore *only commit an iteration that
+    strictly reduces ``abs(charge)``*: each attempt is taken on a snapshot and reverted if
+    it overshoots or makes no progress, and the next attempt re-draws a different
+    candidate (the rng has advanced). The loop can thus never cross zero. ``max_iterations``
+    caps the total attempts; ``max_stalls`` caps consecutive reverts so an unfixable slab
+    stops instead of spinning. If it still cannot reach neutrality, a clear error is raised
+    rather than silently returning a charged slab.
     """
     if bond_lengths is None:
         bond_lengths = DEFAULT_SAT_BOND_LENGTHS
 
     current_charge = amorphous_struct.charge()
     iteration = 0
+    stalls = 0
+    max_stalls = max(20, 4 * len(amorphous_struct))
     while current_charge != 0:
-        if iteration >= max_iterations:
-            print(f"correct_charge: reached max_iterations ({max_iterations}) with "
-                  f"net charge {current_charge}; stopping.")
+        if iteration >= max_iterations or stalls >= max_stalls:
             break
         iteration += 1
         if current_charge > 0:
@@ -249,15 +257,16 @@ def correct_charge(
         if len(indices) == 0:
             indices = find_tetrogonal_sites(amorphous_struct)
         if len(indices) == 0:
-            print("correct_charge: no candidate atoms left to adjust the charge; stopping.")
             break
 
         move = select_idx_for_move(amorphous_struct, indices)
         if move is None:
-            print("correct_charge: candidate atoms are all isolated (no neighbour to move "
-                  "against); stopping.")
             break
         chosen_idx_pos, idx_furthest = move
+
+        # Snapshot the atoms so an overshooting attempt can be reverted. We do NOT snapshot
+        # the rng, so the retry after a revert re-draws a different candidate/placement.
+        snapshot = amorphous_struct.atoms.copy()
         cn_before = amorphous_struct.get_cn()
         n_before = len(amorphous_struct)
         move_atom(
@@ -281,11 +290,25 @@ def correct_charge(
                             bond_length=bond_lengths["H"], num_samples=num_samples)
         # Drop any atom the move orphaned that the re-cap above failed to bond, so it can't
         # dangle in the output or crash a later iteration's move selection.
-        removed = _prune_orphans_from_move(amorphous_struct, cn_before, n_before)
-        if removed:
-            print(f"correct_charge: pruned {removed} atom(s) orphaned by a move and not re-capped")
-        current_charge = amorphous_struct.charge()
+        _prune_orphans_from_move(amorphous_struct, cn_before, n_before)
+
+        new_charge = amorphous_struct.charge()
+        if abs(new_charge) < abs(current_charge):
+            current_charge = new_charge          # genuine progress toward zero -- commit
+            stalls = 0
+        else:
+            # overshoot (crossed zero) or no progress: revert and retry a different candidate
+            amorphous_struct.atoms = snapshot
+            amorphous_struct.invalidate_graph()
+            stalls += 1
 
     amorphous_struct.sort_atoms()
+    final_charge = amorphous_struct.charge()
+    if final_charge != 0:
+        raise ValueError(
+            f"correct_charge could not neutralise the slab: net formal charge {final_charge} "
+            f"remains after {iteration} attempt(s). The charge balance is unsatisfiable with "
+            f"the available over/under-coordinated sites (e.g. an isolated ion with no "
+            f"counter-site to cap).")
 
     
