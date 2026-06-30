@@ -250,6 +250,102 @@ def saturate_under_coordinated(
                 _set_cap_role(amorphous_struct, len(amorphous_struct) - 1, POS_CAP)
 
 
+def _break_and_cap_step(amorphous_struct, current_charge, bond_lengths, num_samples, move_alpha):
+    """One bond-break + re-cap attempt -- ``correct_charge``'s preferred charge step, which
+    repurposes an over/under/variable-CN site so the cap improves coordination rather than over-
+    coordinating. The attempt is taken on a snapshot: returns the new net charge if it strictly
+    reduced ``abs(charge)`` (commit), otherwise reverts and returns ``None`` so the caller falls
+    back to a direct cap. Not snapshotting the rng means the next attempt re-draws a different
+    candidate, so the loop can never get stuck overshooting on the same pick."""
+    if current_charge > 0:
+        # too positive: break a bond at an over-coordinated ANION (oxidation < 0) and add the
+        # negative -OH cap to the freed cation neighbour (each cap is net -1).
+        over_cn = collect_over_or_under_cn_atoms(amorphous_struct, do_under=False)
+        indices = [i for k, v in over_cn.items()
+                   if amorphous_struct.oxidation.get(k, 0) < 0 for i in v]
+    else:
+        # too negative: break a bond at an under-coordinated CATION (oxidation > 0) and add the
+        # positive H cap to the freed anion neighbour (each cap is net +1).
+        undr_cn = collect_over_or_under_cn_atoms(amorphous_struct, do_under=True)
+        indices = [i for k, v in undr_cn.items()
+                   if amorphous_struct.oxidation.get(k, 0) > 0 for i in v]
+    if not indices:
+        indices = find_tetrogonal_sites(amorphous_struct)
+    move = select_idx_for_move(amorphous_struct, indices) if indices else None
+    if move is None:
+        return None
+    chosen_idx_pos, idx_furthest = move
+
+    snapshot = amorphous_struct.atoms.copy()
+    cn_before = amorphous_struct.get_cn()
+    n_before = len(amorphous_struct)
+    move_atom(
+        amorphous_struct,
+        idx_move=chosen_idx_pos,
+        move_away_from=idx_furthest,
+        dist_move=amorphous_struct.d_min_max[amorphous_struct.atoms[chosen_idx_pos].symbol][amorphous_struct.atoms[idx_furthest].symbol][0]+0.2,
+        alpha=move_alpha,
+        )
+
+    # Cap with a bystander-aware placement: the cap bonds only its intended attach atom where
+    # possible, so a forced placement can't over-coordinate unrelated atoms (M2).
+    attach_idx = idx_furthest
+    if current_charge > 0:
+        bl = _cap_bond_length(amorphous_struct, attach_idx, "O", bond_lengths)
+        place_atom_terminal(amorphous_struct, "O", attach_idx, bond_length=bl, num_samples=num_samples)
+        attach_idx = len(amorphous_struct) - 1
+        _set_cap_role(amorphous_struct, attach_idx, NEG_CAP)
+        bl = _cap_bond_length(amorphous_struct, attach_idx, "H", bond_lengths)
+        place_atom_terminal(amorphous_struct, "H", attach_idx, bond_length=bl, num_samples=num_samples)
+        _set_cap_role(amorphous_struct, len(amorphous_struct) - 1, OH_H)
+    else:
+        bl = _cap_bond_length(amorphous_struct, attach_idx, "H", bond_lengths)
+        place_atom_terminal(amorphous_struct, "H", attach_idx, bond_length=bl, num_samples=num_samples)
+        _set_cap_role(amorphous_struct, len(amorphous_struct) - 1, POS_CAP)
+    _prune_orphans_from_move(amorphous_struct, cn_before, n_before)
+
+    new_charge = amorphous_struct.charge()
+    if abs(new_charge) < abs(current_charge):
+        return new_charge
+    amorphous_struct.atoms = snapshot
+    amorphous_struct.invalidate_graph()
+    return None
+
+
+def _add_charge_cap(amorphous_struct, want_negative: bool, bond_lengths, num_samples: int) -> bool:
+    """Charge-correction fallback: cap an existing atom directly to shift the net charge one unit
+    toward zero, used when the bond-break strategy has no over/under/variable-CN site to work with
+    (e.g. a fully-coordinated fixed-CN oxide). For ``want_negative`` (slab too positive) add an
+    -OH group (net -1) to a cation; otherwise add an H (net +1) to an anion. The lowest-coordinated
+    eligible atom is chosen, so an under-coordinated site is preferred (the cap then also improves
+    coordination) and a fully-coordinated one is only mildly over-coordinated as a last resort. A
+    positive net charge guarantees a cation exists and a negative one an anion, so this always makes
+    progress; returns ``False`` only if no atom of the needed sign exists at all (then the slab
+    genuinely has a single charge sign)."""
+    symbols = amorphous_struct.symbols
+    if want_negative:
+        cand = [i for i in range(len(symbols)) if amorphous_struct.oxidation.get(symbols[i], 0) > 0]
+    else:
+        cand = [i for i in range(len(symbols)) if amorphous_struct.oxidation.get(symbols[i], 0) < 0]
+    if not cand:
+        return False
+    cn = amorphous_struct.get_cn()
+    anchor = int(min(cand, key=lambda i: cn[i]))
+    if want_negative:
+        bl = _cap_bond_length(amorphous_struct, anchor, "O", bond_lengths)
+        place_atom_terminal(amorphous_struct, "O", anchor, bond_length=bl, num_samples=num_samples)
+        o_idx = len(amorphous_struct) - 1
+        _set_cap_role(amorphous_struct, o_idx, NEG_CAP)
+        bl = _cap_bond_length(amorphous_struct, o_idx, "H", bond_lengths)
+        place_atom_terminal(amorphous_struct, "H", o_idx, bond_length=bl, num_samples=num_samples)
+        _set_cap_role(amorphous_struct, len(amorphous_struct) - 1, OH_H)
+    else:
+        bl = _cap_bond_length(amorphous_struct, anchor, "H", bond_lengths)
+        place_atom_terminal(amorphous_struct, "H", anchor, bond_length=bl, num_samples=num_samples)
+        _set_cap_role(amorphous_struct, len(amorphous_struct) - 1, POS_CAP)
+    return True
+
+
 def correct_charge(
         amorphous_struct: AmorphousStruc,
         bond_lengths=None,
@@ -257,107 +353,43 @@ def correct_charge(
         num_samples: int = 250,
         move_alpha: float = 0.5,
     ):
-    """ Creates a charge neutral surface through adding H and OH until correct. Add to over-coordinated atoms. Does not Optimize structure.
+    """Drive the slab to net formal charge zero by adding H / -OH caps. Two strategies per step:
 
-    Each iteration breaks one bond and re-caps with an H/OH group, which should change
-    the net formal charge by one unit toward zero. It is not guaranteed to, though:
-    ``_prune_orphans_from_move`` can delete a charged atom the move orphaned (e.g. a -2 O
-    or a +1 H), so a single iteration can jump the charge by more than one and even
-    *overshoot* past zero -- after which there may be no candidate left to come back, and
-    the slab would ship charged. To stay robust we therefore *only commit an iteration that
-    strictly reduces ``abs(charge)``*: each attempt is taken on a snapshot and reverted if
-    it overshoots or makes no progress, and the next attempt re-draws a different
-    candidate (the rng has advanced). The loop can thus never cross zero. ``max_iterations``
-    caps the total attempts; ``max_stalls`` caps consecutive reverts so an unfixable slab
-    stops instead of spinning. If it still cannot reach neutrality, a clear error is raised
-    rather than silently returning a charged slab.
+    1. *Preferred* -- break a bond at an over/under/variable-CN site and re-cap the freed neighbour
+       (``_break_and_cap_step``); this repurposes a coordination defect so the cap improves
+       coordination rather than over-coordinating. Taken on a snapshot and only committed if it
+       strictly reduces ``abs(charge)``, so an orphan-prune that jumps the charge can never make
+       the loop overshoot zero.
+    2. *Fallback* -- when no such site exists, or the break step can't make progress, cap an
+       existing cation (add -OH, slab too positive) or anion (add H, slab too negative) directly
+       (``_add_charge_cap``). A positive net charge always has a cation to cap and a negative one
+       an anion, so this guarantees one unit of progress toward zero every iteration. The loop
+       therefore always reaches 0 -- the cost is mildly over-coordinating a few atoms when the
+       structure is already fully coordinated (e.g. a fixed-CN borate / phosphate that the bond-
+       break strategy alone could not neutralise). The post-loop check stays as a safety net.
     """
     current_charge = amorphous_struct.charge()
     iteration = 0
-    stalls = 0
-    max_stalls = max(20, 4 * len(amorphous_struct))
-    while current_charge != 0:
-        if iteration >= max_iterations or stalls >= max_stalls:
-            break
+    while current_charge != 0 and iteration < max_iterations:
         iteration += 1
-        if current_charge > 0:
-            # too positive: break a bond at an over-coordinated ANION (oxidation < 0) and add
-            # the negative -OH cap to the freed cation neighbour (each cap is net -1).
-            over_cn = collect_over_or_under_cn_atoms(amorphous_struct, do_under=False)
-            indices = [i for k, v in over_cn.items()
-                       if amorphous_struct.oxidation.get(k, 0) < 0 for i in v]
-        else:
-            # too negative: break a bond at an under-coordinated CATION (oxidation > 0) and add
-            # the positive H cap to the freed anion neighbour (each cap is net +1).
-            undr_cn = collect_over_or_under_cn_atoms(amorphous_struct, do_under=True)
-            indices = [i for k, v in undr_cn.items()
-                       if amorphous_struct.oxidation.get(k, 0) > 0 for i in v]
-
-        if len(indices) == 0:
-            indices = find_tetrogonal_sites(amorphous_struct)
-        if len(indices) == 0:
+        committed = _break_and_cap_step(amorphous_struct, current_charge,
+                                        bond_lengths, num_samples, move_alpha)
+        if committed is not None:
+            current_charge = committed
+            continue
+        # No usable bond-break site (or it could not make progress): fall back to a direct cap,
+        # which always shifts the charge one unit toward zero while a cation/anion exists.
+        if not _add_charge_cap(amorphous_struct, current_charge > 0, bond_lengths, num_samples):
             break
-
-        move = select_idx_for_move(amorphous_struct, indices)
-        if move is None:
-            break
-        chosen_idx_pos, idx_furthest = move
-
-        # Snapshot the atoms so an overshooting attempt can be reverted. We do NOT snapshot
-        # the rng, so the retry after a revert re-draws a different candidate/placement.
-        snapshot = amorphous_struct.atoms.copy()
-        cn_before = amorphous_struct.get_cn()
-        n_before = len(amorphous_struct)
-        move_atom(
-            amorphous_struct,
-            idx_move=chosen_idx_pos,
-            move_away_from=idx_furthest,
-            dist_move=amorphous_struct.d_min_max[amorphous_struct.atoms[chosen_idx_pos].symbol][amorphous_struct.atoms[idx_furthest].symbol][0]+0.2,
-            alpha=move_alpha,
-            )
-
-        # Cap with a bystander-aware placement: the cap bonds only its intended attach atom
-        # where possible, so a forced placement can't over-coordinate unrelated atoms (M2).
-        # (The attach atom itself may still gain a bond beyond its max -- the move above was
-        # meant to free a slot but is left as a no-op, so this only guards the bystanders.)
-        attach_idx = idx_furthest
-        if current_charge > 0:
-            bl = _cap_bond_length(amorphous_struct, attach_idx, "O", bond_lengths)
-            place_atom_terminal(amorphous_struct, "O", attach_idx,
-                                bond_length=bl, num_samples=num_samples)
-            attach_idx = len(amorphous_struct) - 1
-            _set_cap_role(amorphous_struct, attach_idx, NEG_CAP)
-            bl = _cap_bond_length(amorphous_struct, attach_idx, "H", bond_lengths)
-            place_atom_terminal(amorphous_struct, "H", attach_idx,
-                                bond_length=bl, num_samples=num_samples)
-            _set_cap_role(amorphous_struct, len(amorphous_struct) - 1, OH_H)
-        else:
-            bl = _cap_bond_length(amorphous_struct, attach_idx, "H", bond_lengths)
-            place_atom_terminal(amorphous_struct, "H", attach_idx,
-                                bond_length=bl, num_samples=num_samples)
-            _set_cap_role(amorphous_struct, len(amorphous_struct) - 1, POS_CAP)
-        # Drop any atom the move orphaned that the re-cap above failed to bond, so it can't
-        # dangle in the output or crash a later iteration's move selection.
-        _prune_orphans_from_move(amorphous_struct, cn_before, n_before)
-
-        new_charge = amorphous_struct.charge()
-        if abs(new_charge) < abs(current_charge):
-            current_charge = new_charge          # genuine progress toward zero -- commit
-            stalls = 0
-        else:
-            # overshoot (crossed zero) or no progress: revert and retry a different candidate
-            amorphous_struct.atoms = snapshot
-            amorphous_struct.invalidate_graph()
-            stalls += 1
+        current_charge = amorphous_struct.charge()
 
     amorphous_struct.sort_atoms()
     final_charge = amorphous_struct.charge()
     if final_charge != 0:
         raise ValueError(
             f"correct_charge could not neutralise the slab: net formal charge {final_charge} "
-            f"remains after {iteration} attempt(s). The charge balance is unsatisfiable with "
-            f"the available over/under-coordinated sites (e.g. an isolated ion with no "
-            f"counter-site to cap).")
+            f"remains after {iteration} iteration(s) -- no atom of the needed charge sign was "
+            f"available to cap (the structure has only one charge sign).")
 
 
 def _relabel_target(fragment, default_chain):
