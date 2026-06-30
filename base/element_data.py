@@ -237,6 +237,20 @@ def derive_pair_distances(
     return sample_dist, d_min_max, pair_cutoffs
 
 
+def derive_bond_length(a: str, b: str, bond_factor: float | None = None) -> float:
+    """Covalent-radii bond length for an ``a``-``b`` pair, in Angstrom.
+
+    The same model used for the bond-sampling window centre in ``derive_pair_distances``
+    (``bond_factor * (r_a + r_b)``), exposed standalone so the saturation stage can place
+    caps at a coherent physical distance for *any* element pair -- including pairs the run's
+    ``sample_dist`` never holds (it only carries grown cation-anion pairs, not e.g. X-H or
+    X-F). ``bond_factor`` defaults to ``DEFAULT_DISTANCE_KNOBS['bond_factor']``.
+    """
+    if bond_factor is None:
+        bond_factor = DEFAULT_DISTANCE_KNOBS["bond_factor"]
+    return bond_factor * (_covalent_radius(a) + _covalent_radius(b))
+
+
 def build_element_tables(
         elements,
         *,
