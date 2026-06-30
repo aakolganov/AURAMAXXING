@@ -67,6 +67,24 @@ class CalculatorInterface(ABC):
             write(filepath, atoms, append=True, format=fmt)
         run.attach(write_frame, interval=interval)
 
+    @staticmethod
+    def _resolve_dtype(device: str, explicit_dtype):
+        """Default precision: float64 on CPU/CUDA (more accurate, recommended for
+        geometry optimisation), float32 on MPS (Apple Silicon has no float64). An
+        explicitly passed ``dtype`` always wins.
+        """
+        if explicit_dtype is not None:
+            return explicit_dtype
+        return "float32" if device == "mps" else "float64"
+
+    @staticmethod
+    def _is_local_path(model: str) -> bool:
+        """True if `model` denotes a local file (which must exist) rather than a
+        foundation-model keyword/URL that mace_mp resolves and downloads itself."""
+        if model.startswith(("http://", "https://")):
+            return False
+        return (os.sep in model) or model.endswith((".model", ".pt", ".pth"))
+    
 
     def optimize(self, atoms: Atoms, fmax: float = 2.0, max_steps: int = 50,
                  logfile: str = "log.log", traj_name: str | None = None, traj_fmt: str | None = None,

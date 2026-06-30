@@ -9,7 +9,6 @@ import pytest
 from interfaces.UMA_interface import (
     FUNCTIONAL,
     _adds_external_dispersion,
-    _is_local_checkpoint,
     _validate_task,
 )
 
@@ -21,8 +20,10 @@ from interfaces.UMA_interface import (
     ("ckpts/uma.ckpt", True),      # has a path separator
     ("model.pth", True),           # checkpoint extension
 ])
-def test_is_local_checkpoint(model, is_local):
-    assert _is_local_checkpoint(model) is is_local
+def test_is_local_path(model, is_local):
+    from interfaces.UMA_interface import UMAInterface
+    p = UMAInterface._is_local_path
+    assert p(model) is is_local
 
 
 def test_validate_task_accepts_known_and_rejects_unknown():
