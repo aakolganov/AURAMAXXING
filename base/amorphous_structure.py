@@ -31,6 +31,9 @@ class AmorphousStruc:
     d_min_max: dict = field(default_factory=default_d_min_max.copy)
     cn_distr: dict = field(default_factory=default_cn_distr.copy)
     oxidation: dict = field(default_factory=default_oxidation.copy)
+    # Covalent-radii bond-window scale used to place saturation caps at the run's bond scale
+    # (defaults to 1.0x, matching the legacy/default placement).
+    bond_factor: float = 1.0
     rng: np.random.Generator = field(default_factory=np.random.default_rng)
     limits: Limits = field(default=None, init=False, repr=False)
 
@@ -423,6 +426,7 @@ def AmorphousStruc_factory(
             d_min_max=config.d_min_max.copy(),
             cn_distr=config.cn_distr.copy(),
             oxidation=config.oxidation.copy(),
+            bond_factor=config.bond_factor,
         )
 
     return AmorphousStruc(atoms=atoms_obj, rng=rng, **kwargs)

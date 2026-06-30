@@ -38,7 +38,8 @@ def _cap_bond_length(amorphous_struct, anchor_idx: int, cap_sym: str, override) 
     including X-H / X-F pairs the run's ``sample_dist`` never carries."""
     if override is not None and cap_sym in override:
         return override[cap_sym]
-    return derive_bond_length(amorphous_struct.atoms[anchor_idx].symbol, cap_sym)
+    return derive_bond_length(amorphous_struct.atoms[anchor_idx].symbol, cap_sym,
+                              bond_factor=getattr(amorphous_struct, "bond_factor", None))
 
 
 def _try_then_force_place(amorphous_struct, place_atom: str, attach_idx: int, *,
@@ -385,7 +386,8 @@ def _retype_and_reposition(amorphous_struct, idx, anchor_idx, target_sym, pos0, 
     vec, dist = find_mic(pos0[idx] - pos0[anchor_idx], cell, pbc)
     bl = bond_lengths.get(target_sym) if bond_lengths else None
     if bl is None:
-        bl = derive_bond_length(amorphous_struct.atoms[anchor_idx].symbol, target_sym)
+        bl = derive_bond_length(amorphous_struct.atoms[anchor_idx].symbol, target_sym,
+                                bond_factor=getattr(amorphous_struct, "bond_factor", None))
     if dist < 1e-6:
         direction = amorphous_struct.rng.normal(size=3)
         direction = direction / np.linalg.norm(direction)
@@ -427,14 +429,31 @@ def relabel_caps(amorphous_struct, negative_fragment=None, positive_fragment=Non
 
     # Retypes keep indices stable (anchors are network atoms, never retyped); the OH hydrogens
     # are removed in one batch at the end, so indices recorded here stay valid throughout.
-    remove = []
+    remove = set()
     if target_neg is not None:
+        # Swap each clean -OH group (one terminal cap-O + its hydrogen) for the target, pairing
+        # each retyped O with exactly one OH_H to drop so the swap is charge-balanced one-for-one.
+        # We pair via the live O-H bond when it survived, else fall back to any unclaimed OH_H by
+        # count -- so neither a stretched O-H bond NOR an asymmetric orphan-prune (which can delete
+        # a NEG_CAP O or its OH_H independently, diverging the counts) can break neutrality. A
+        # cap-O the relax pulled into a bridge (>=1 means !=1 cation neighbour) is NOT a clean
+        # terminal cap, so it is left as oxide/hydroxyl rather than retyped to a 1-valent anion
+        # bonded to two cations.
+        oh_pool = [int(i) for i in np.where(roles == OH_H)[0]]
         for i in np.where(roles == NEG_CAP)[0]:
             i = int(i)
-            cat = next((n for n in graph.neighbors(i) if symbols[n] != "H"
-                        and amorphous_struct.oxidation.get(symbols[n], 0) > 0), None)
-            _retype_and_reposition(amorphous_struct, i, cat, target_neg, pos0, bond_lengths)
-        remove.extend(int(i) for i in np.where(roles == OH_H)[0])
+            if len(remove) >= len(oh_pool):
+                break                               # no OH_H left to balance another retype
+            cats = [n for n in graph.neighbors(i) if symbols[n] != "H"
+                    and amorphous_struct.oxidation.get(symbols[n], 0) > 0]
+            if len(cats) != 1:
+                continue                            # bridging / isolated cap-O -> leave as is
+            _retype_and_reposition(amorphous_struct, i, cats[0], target_neg, pos0, bond_lengths)
+            own = next((n for n in graph.neighbors(i)
+                        if roles[n] == OH_H and n not in remove), None)
+            if own is None:
+                own = next((h for h in oh_pool if h not in remove), None)
+            remove.add(own)
     if target_pos is not None:
         for i in np.where(roles == POS_CAP)[0]:
             i = int(i)
@@ -444,7 +463,7 @@ def relabel_caps(amorphous_struct, negative_fragment=None, positive_fragment=Non
 
     if remove:
         mask = np.zeros(len(amorphous_struct), dtype=bool)
-        mask[remove] = True
+        mask[list(remove)] = True
         amorphous_struct.remove_atom(mask)
 
     amorphous_struct.invalidate_graph()

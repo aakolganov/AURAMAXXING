@@ -11,7 +11,7 @@ from . import plots
 _FIGURES = [
     ("coordination.png", plots.plot_coordination, False),
     ("homo_element_distance.png", plots.plot_homo_distance, False),
-    ("element_O_distance.png", plots.plot_element_O, False),
+    ("element_anion_distance.png", plots.plot_element_O, False),
     ("tau4.png", plots.plot_tau4, False),
     ("cap_distance.png", plots.plot_cap_distance, True),
     ("caps_per_cation.png", plots.plot_caps_per_cation, True),

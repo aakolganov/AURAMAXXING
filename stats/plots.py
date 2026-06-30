@@ -75,16 +75,16 @@ def plot_homo_distance(metrics: dict, path: Path):
 
 def plot_element_O(metrics: dict, path: Path):
     fig, ax = plt.subplots(figsize=(7, 4))
-    data = {el: v for el, v in metrics["element_O_distance"].items() if v}
+    data = {el: v for el, v in metrics["element_anion_distance"].items() if v}
     if not data:
         _empty(ax)
     else:
         for el in sorted(data):
-            ax.hist(data[el], bins=30, alpha=0.55, label=f"{el}–O", color=_color(el))
+            ax.hist(data[el], bins=30, alpha=0.55, label=f"{el}–anion", color=_color(el))
         ax.legend()
-    ax.set_xlabel("nearest element–O distance (Å)")
+    ax.set_xlabel("nearest element–anion distance (Å)")
     ax.set_ylabel("count")
-    ax.set_title("Element–O closest-distance distribution")
+    ax.set_title("Element–anion closest-distance distribution")
     _save(fig, path)
 
 

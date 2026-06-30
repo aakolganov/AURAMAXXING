@@ -2,18 +2,39 @@
 
 Analyses one or more saved structure files. Fixed atoms are recovered from a POSCAR's
 Selective Dynamics (ASE reads them into a FixAtoms constraint); the coordination graph is
-rebuilt with the default cutoffs. ``--saturation`` enables the O-H / OH-per-cation plots
-(it cannot be inferred from a structure file).
+rebuilt with covalent-radii cutoffs derived for the file's actual elements (so e.g. F/Cl/Na
+caps are bonded and counted, not just the default Si/Al/O/H). ``--saturation`` enables the
+cap-distance / caps-per-cation plots (it cannot be inferred from a structure file).
 """
 import argparse
 import sys
 from pathlib import Path
 
 
+def _coordination_for(atoms):
+    """A CoordinationConfig covering the file's elements (curated CN/oxidation + covalent-radii
+    cutoffs), so a re-read F/Cl/Na cap is bonded and counted -- the module-default tables only
+    know Si/Al/O/H. Unknown elements become spectators (distance rows, no curated CN). Returns
+    ``None`` (use the default tables) when no element is curated. Note: an alkali cap with a
+    multivalent curated CN (e.g. Na, max_cn 6) is not flagged terminal on bare re-read -- the
+    in-pipeline run, which registers caps at CN 1, counts it correctly."""
+    from base.config import CoordinationConfig
+    from base.element_data import build_element_tables, OXIDE_ELEMENTS
+    elems = sorted(set(atoms.get_chemical_symbols()))
+    curated = [e for e in elems if e in OXIDE_ELEMENTS]
+    if not curated:
+        return None
+    spectators = [e for e in elems if e not in OXIDE_ELEMENTS]
+    t = build_element_tables(curated, spectator_elements=spectators)
+    return CoordinationConfig(max_cn=t["max_cn"], min_cn=t["min_cn"], cut_offs=t["cut_offs"],
+                              sample_dist=t["sample_dist"], d_min_max=t["d_min_max"],
+                              oxidation=t["oxidation"])
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m stats",
-        description="Plot structural statistics (coordination, homo-element & element-O "
+        description="Plot structural statistics (coordination, homo-element & element-anion "
                     "distances, tau4/tau4', and OH stats) for saved structure files.")
     parser.add_argument("structures", nargs="+", help="structure file(s) ASE can read (POSCAR, .vasp, .xyz, ...)")
     parser.add_argument("--out", default="stats", help="output directory (default: ./stats)")
@@ -29,7 +50,8 @@ def main(argv=None) -> int:
     all_metrics = []
     for path in args.structures:
         try:
-            struct = AmorphousStruc_factory(atoms=read(path))
+            atoms = read(path)
+            struct = AmorphousStruc_factory(atoms=atoms, config=_coordination_for(atoms))
         except Exception as exc:
             print(f"error: cannot read {path}: {exc}", file=sys.stderr)
             return 2

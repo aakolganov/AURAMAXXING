@@ -49,7 +49,7 @@ def analyze_structure(struct, is_saturation: bool = False) -> dict:
         "composition": {el: int(np.count_nonzero(symbols == el)) for el in elements},
         "coordination": {},
         "homo_distance": {},
-        "element_O_distance": {},
+        "element_anion_distance": {},
         "tau4": {},
         "saturation": None,
     }
@@ -90,7 +90,7 @@ def analyze_structure(struct, is_saturation: bool = False) -> dict:
             subj = np.where((symbols == el) & mobile)[0]
             if len(subj) == 0:
                 continue
-            out["element_O_distance"][el] = [float(dmat[i, anion_idx].min()) for i in subj]
+            out["element_anion_distance"][el] = [float(dmat[i, anion_idx].min()) for i in subj]
 
     # 4) tau4 / tau4' for 4-coordinate mobile centres
     for el in elements:
@@ -120,7 +120,9 @@ def analyze_structure(struct, is_saturation: bool = False) -> dict:
                 d = dmat[i, a] if np.isfinite(dmat[i, a]) else atoms.get_distance(i, a, mic=True)
                 cap_distances.setdefault(f"{symbols[a]}-{symbols[i]}", []).append(float(d))
         # Caps per cation: a neighbouring anion that is "finished" -- bonded to this cation and
-        # otherwise only to H (a hydroxyl -OH) or to nothing else (a terminal halide cap).
+        # otherwise only to monovalent caps (a hydroxyl's H, or a relabelled Na/other 1-valent
+        # cap) or to nothing else (a terminal halide). The completing partner is any monovalent
+        # (max_cn 1) atom, not hardcoded H, so a non-H positive relabel (e.g. O-Na) still counts.
         caps_per_cation: dict = {}
         for el in sorted(cations):
             subj = np.where((symbols == el) & mobile)[0]
@@ -130,7 +132,8 @@ def analyze_structure(struct, is_saturation: bool = False) -> dict:
             for i in subj:
                 n_cap = sum(1 for nb in graph.neighbors(i)
                             if symbols[nb] in anions
-                            and all(symbols[o] == "H" for o in graph.neighbors(nb) if o != i))
+                            and all(max_cn.get(symbols[o], 99) == 1
+                                    for o in graph.neighbors(nb) if o != i))
                 counts.append(int(n_cap))
             caps_per_cation[el] = counts
         out["saturation"] = {"cap_distances": cap_distances, "caps_per_cation": caps_per_cation}
@@ -143,7 +146,7 @@ def merge_metrics(metrics_list: list) -> dict:
     metrics_list = [m for m in metrics_list if m]
     merged: dict = {"n_atoms": 0, "n_fixed": 0, "n_structures": len(metrics_list),
                     "composition": {}, "coordination": {}, "homo_distance": {},
-                    "element_O_distance": {}, "tau4": {}, "saturation": None}
+                    "element_anion_distance": {}, "tau4": {}, "saturation": None}
     sat_d, sat_c = {}, {}
     for m in metrics_list:
         merged["n_atoms"] += m["n_atoms"]
@@ -158,16 +161,18 @@ def merge_metrics(metrics_list: list) -> dict:
             tgt["distances"].extend(d["distances"])
             tgt["homo_bond_count"] += d["homo_bond_count"]
             tgt["cutoff"] = tgt["cutoff"] if tgt["cutoff"] is not None else d["cutoff"]
-        for el, v in m["element_O_distance"].items():
-            merged["element_O_distance"].setdefault(el, []).extend(v)
+        for el, v in m["element_anion_distance"].items():
+            merged["element_anion_distance"].setdefault(el, []).extend(v)
         for el, d in m["tau4"].items():
             tgt = merged["tau4"].setdefault(el, {"tau4": [], "tau4_prime": []})
             tgt["tau4"].extend(d["tau4"])
             tgt["tau4_prime"].extend(d["tau4_prime"])
         if m.get("saturation"):
-            for label, v in m["saturation"]["cap_distances"].items():
+            # .get() so a pre-rename metrics.json (oh_distances/oh_per_element) on disk pools as
+            # empty rather than KeyError-ing the whole pooled report.
+            for label, v in m["saturation"].get("cap_distances", {}).items():
                 sat_d.setdefault(label, []).extend(v)
-            for el, v in m["saturation"]["caps_per_cation"].items():
+            for el, v in m["saturation"].get("caps_per_cation", {}).items():
                 sat_c.setdefault(el, []).extend(v)
     if sat_d or sat_c:
         merged["saturation"] = {"cap_distances": sat_d, "caps_per_cation": sat_c}
@@ -191,12 +196,13 @@ def summarize(metrics: dict) -> dict:
         "coordination_mean": {el: (float(np.mean(v)) if v else None)
                               for el, v in metrics["coordination"].items()},
         "homo_bonds": {el: d["homo_bond_count"] for el, d in metrics["homo_distance"].items()},
-        "element_O_distance": {el: _summary_stats(v) for el, v in metrics["element_O_distance"].items()},
+        "element_anion_distance": {el: _summary_stats(v) for el, v in metrics["element_anion_distance"].items()},
         "tau4_mean": {el: float(np.mean(d["tau4"])) for el, d in metrics["tau4"].items()},
     }
     if metrics.get("saturation"):
         sat = metrics["saturation"]
-        s["cap_distance"] = {label: _summary_stats(v) for label, v in sat["cap_distances"].items()}
+        s["cap_distance"] = {label: _summary_stats(v)
+                             for label, v in sat.get("cap_distances", {}).items()}
         s["caps_per_cation_mean"] = {el: (float(np.mean(v)) if v else None)
-                                     for el, v in sat["caps_per_cation"].items()}
+                                     for el, v in sat.get("caps_per_cation", {}).items()}
     return s

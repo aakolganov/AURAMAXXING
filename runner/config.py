@@ -21,7 +21,8 @@ import yaml
 from ase.formula import Formula
 
 from base.config import CoordinationConfig
-from base.element_data import OXIDE_ELEMENTS, build_element_tables, element_record, normalize_cn_distr
+from base.element_data import (OXIDE_ELEMENTS, build_element_tables, element_record,
+                               normalize_cn_distr, DEFAULT_DISTANCE_KNOBS)
 
 
 # --- validation helpers -------------------------------------------------------------
@@ -423,8 +424,15 @@ def _saturation_fragment_elements(sat_block: Optional[dict]) -> set:
         raw = sat_block.get(key)
         if raw is None:
             continue
-        frag = [raw] if isinstance(raw, str) else list(raw)
-        elems.update(str(e) for e in frag)
+        # A malformed (non-str/non-list) value is left for SaturationSpec.from_dict/_parse_fragment
+        # to reject with the clear error, rather than raising a raw TypeError from list(raw) here.
+        if isinstance(raw, str):
+            frag = [raw]
+        elif isinstance(raw, (list, tuple)):
+            frag = list(raw)
+        else:
+            continue
+        elems.update(str(e) for e in frag if isinstance(e, str))
     return elems
 
 
@@ -443,6 +451,37 @@ def _validate_fragments(sat: SaturationSpec, oxidation: dict, where: str) -> Non
             raise ValueError(f"{where}.{label}: fragment {list(frag)} has net formal charge "
                              f"{charge:+d}, but saturation fragments must be 1-valent "
                              f"({want:+d}).")
+
+
+def _validate_cn_distr_oxidation(cn_distr: dict, oxidation: dict, cap_elements: set,
+                                 where: str) -> None:
+    """Reject per-atom oxidation overrides (from cn_distr) that the saturation/charge stage
+    cannot reconcile:
+
+    - An override on a cap element (O, H, or a fragment element, in ``cap_elements``) puts a
+      non-default charge on an atom the engine reuses as a saturation cap, which breaks the
+      count-based charge-correction / relabel balance (the cap's formal charge no longer cancels
+      its partner). Only checked when saturation is enabled (the caller passes an empty set
+      otherwise).
+    - An override whose sign differs from the element's base oxidation mis-classifies the atom as
+      cation vs anion for both growth attachment and saturation site selection -- always rejected.
+    """
+    for el, variants in (cn_distr or {}).items():
+        base = oxidation.get(el, 0)
+        for v in variants:
+            ox = v.get("oxidation")
+            if ox is None:
+                continue
+            if el in cap_elements:
+                raise ValueError(
+                    f"{where}: a cn_distr 'oxidation' override on {el!r} is not allowed -- it is "
+                    f"used as a saturation cap, and a per-atom charge on a cap breaks the "
+                    f"charge-correction / relabel charge balance.")
+            if base and (ox > 0) != (base > 0):
+                raise ValueError(
+                    f"{where}: cn_distr 'oxidation' {ox:+d} on {el!r} has the opposite sign of its "
+                    f"base oxidation {base:+d}; that mis-classifies it as a "
+                    f"{'cation' if ox > 0 else 'anion'} for growth and saturation.")
 
 
 @dataclass
@@ -662,6 +701,10 @@ def _build_coordination(d: Optional[dict], where: str, *, elements, oxidation,
         max_cn=tables["max_cn"], min_cn=tables["min_cn"], cut_offs=tables["cut_offs"],
         sample_dist=tables["sample_dist"], d_min_max=tables["d_min_max"],
         oxidation=tables["oxidation"],
+        # carry the effective bond-window scale so the saturation stage places caps at the same
+        # scale as the grown network (not always the 1.0x default).
+        bond_factor=float((distance_knobs or {}).get("bond_factor",
+                                                     DEFAULT_DISTANCE_KNOBS["bond_factor"])),
     )
     if d and "cn_distr" in d:
         cfg.cn_distr.update(_parse_cn_distr(d["cn_distr"], f"{where}.cn_distr"))
@@ -744,7 +787,11 @@ class RunConfig:
         # the element tables (distance/cutoff rows + an oxidation) and are forced to a terminal
         # CN of 1, so a placed cap is never re-flagged under-coordinated.
         sat_block = _as_dict(d["saturation"], "saturation") if d.get("saturation") is not None else None
-        cap_elems = _saturation_fragment_elements(sat_block) - (comp_parsed["elements"] | {"O", "H"})
+        # Fragment cap elements are wired in (and validated) only when saturation actually runs,
+        # consistent with the saturation BKS guard below -- a disabled saturation block is inert.
+        sat_enabled = bool(sat_block.get("enabled", False)) if sat_block else False
+        cap_elems = (_saturation_fragment_elements(sat_block) - (comp_parsed["elements"] | {"O", "H"})
+                     if sat_enabled else set())
         elements = sorted(comp_parsed["elements"] | {"O", "H"}
                           | _coord_override_elements(coord_block) | cap_elems)
         oxidation = _resolve_oxidation(elements, coord_block, "coordination")
@@ -759,7 +806,12 @@ class RunConfig:
 
         calculators = CalculatorsSpec.from_dict(d["calculators"], "calculators")
         saturation = SaturationSpec.from_dict(d.get("saturation", {}), "saturation")
-        _validate_fragments(saturation, oxidation, "saturation")
+        # cap elements (O, H, fragments) must not carry per-atom oxidation overrides when
+        # saturation runs; the opposite-sign growth check applies regardless.
+        cap_block = ({"O", "H"} | cap_elems) if saturation.enabled else set()
+        _validate_cn_distr_oxidation(coordination.cn_distr, oxidation, cap_block, "coordination.cn_distr")
+        if saturation.enabled:
+            _validate_fragments(saturation, oxidation, "saturation")
         _check_bks_supported(calculators, set(composition.target_counts),
                              saturation.enabled, "calculators")
 
