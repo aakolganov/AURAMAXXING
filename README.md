@@ -14,10 +14,12 @@ Contributors:
 A structure is built up atom-by-atom inside a configurable growth region, relaxed, and
 then chemically terminated. The pipeline stages:
 
-1. **Grow** — `growth.new_growth.grow_structure`: pick the next atom type from the
-   target stoichiometry, choose an under-coordinated anchor, and place it on a sphere
-   at a sampled bond length with KD-tree collision checking. On a steric jam the
-   structure is melt-quenched (anneal) and re-sliced to the growth limits.
+1. **Grow** — `growth.new_growth.grow_structure`: pick the next element from the target
+   composition, choose an under-coordinated opposite-charge anchor, and place it on a sphere
+   at a sampled bond length with KD-tree collision checking. On a steric jam the structure is
+   melt-quenched (anneal) and re-sliced to the growth limits. Growth is composition-general
+   (see below): oxidation states, coordination numbers and bond-length distances are
+   data-driven, and the requested composition is made charge-neutral.
 2. **Finalize** — `growth.new_growth.finalize_structure`: geometry optimization (LBFGS)
    with the chosen calculator.
 3. **Saturate** — `saturation.new_sat.saturate_under_coordinated`: cap under-coordinated
@@ -28,6 +30,34 @@ then chemically terminated. The pipeline stages:
    as `AvoidMotifSwapRule` (e.g. avoid Al–O–Al) and `MinimumDistanceRule`.
 
 The growth region is defined by a flat bottom and a flat or Fourier-roughened top surface.
+
+## Generation: composition & coordination
+
+Bare-surface growth works for arbitrary oxides, not just silica/alumina. The composition is
+given in any of these forms (see the configuration reference for the exact keys), and the cell
+is made charge-neutral automatically:
+
+- **brutto formula** — `formula: "SiO2"`
+- **elemental ratio** — `ratio: {Si: 8, O: 2, Al: 1}`
+- **structural mix** — `mix: {SiO2: 7, Al2O3: 1}` (also `"SiO2:Al2O3=7:1"` or `"70% SiO2 + 30% Al2O3"`)
+- **explicit counts** — `counts: {Si: 160, O: 320}`
+
+The first three take a `total_atoms`; the legacy `target_ratios` + `target_number_atoms` keys
+still work. The resulting integer counts are adjusted to the nearest **charge-neutral**
+composition (Σ count × oxidation = 0), keeping the requested ratios as close as possible, and
+the adjustment is reported.
+
+Per-element **oxidation states and coordination numbers** default from a curated table of
+common oxide formers (`base/element_data.py`); per-pair **bond-length, collision and
+bonding-cutoff distances** are derived from a covalent-radii model (ASE `covalent_radii`), so a
+placed bond is always within its bonding cutoff. All of these are overridable in the
+`coordination` block, and an element not in the curated table can be supplied there. A
+`cn_distr` lets a fraction of an element take a different coordination number (and, optionally,
+oxidation) — e.g. ~20% of Al grown at CN 6.
+
+Relax arbitrary oxides with an **MLIP** (MACE/UMA). The classical **BKS/LAMMPS** backend is a
+lightweight generator for **silica(-aluminas) only** (Si/Al/O) and raises a clear error for any
+other element. (Chemical saturation/charge-correction is currently Si/Al/O/H-specific.)
 
 ## Installation
 
@@ -141,7 +171,8 @@ coordination:               # optional; partial overrides merge onto the derived
 
 calculators:                # type: lammps | mace | uma; extra keys are backend kwargs
   # NB: the lammps/BKS backend is a lightweight generator for silica(-aluminas) only -- it
-  # supports Si/Al/O and raises on any other element. Use mace/uma for arbitrary oxides.
+  # supports Si/Al/O and raises on any other element. Use mace/uma for arbitrary oxides. BKS
+  # also can't be the saturation calculator (saturation adds H, which BKS has no params for).
   growth:     {type: lammps, dump_path: dump_lmp}
   saturation: {type: mace, mace_model_path: model.model, device: cuda, dump_path: dump_mace}
               # optional; defaults to the growth calculator. mace needs mace_model_path;
