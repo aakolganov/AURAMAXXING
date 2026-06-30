@@ -356,17 +356,93 @@ class FinalizeSpec:
                    traj_interval=int(d.get("traj_interval", 1)))
 
 
+DEFAULT_POS_FRAGMENT = ("H",)
+DEFAULT_NEG_FRAGMENT = ("O", "H")
+
+
+def _parse_fragment(raw, where: str) -> tuple:
+    """A saturation fragment: an ordered list of element symbols (or a bare symbol). The first
+    atom bonds to the surface site, each next atom to the previous one (e.g. ``[O, H]`` is the
+    -OH group)."""
+    if isinstance(raw, str):
+        frag = (raw,)
+    elif isinstance(raw, (list, tuple)) and raw and all(isinstance(e, str) for e in raw):
+        frag = tuple(raw)
+    else:
+        raise ValueError(f"{where}: expected an element symbol or a non-empty list of symbols, "
+                         f"got {raw!r}")
+    return frag
+
+
+def _validate_mode(mode: str, pos: tuple, neg: tuple, where: str) -> None:
+    """A given ``mode`` must be consistent with the fragments (mode is otherwise inferred from
+    them). anion_cap = cap cations with a non-default electronegative fragment, anions keep H;
+    cation_cap = cap anions with a non-default electropositive fragment, cations keep -OH."""
+    if mode == "anion_cap" and (pos != DEFAULT_POS_FRAGMENT or neg == DEFAULT_NEG_FRAGMENT):
+        raise ValueError(f"{where}.mode 'anion_cap': set a non-default negative_fragment "
+                         f"(e.g. F) and leave positive_fragment at the default H.")
+    if mode == "cation_cap" and (neg != DEFAULT_NEG_FRAGMENT or pos == DEFAULT_POS_FRAGMENT):
+        raise ValueError(f"{where}.mode 'cation_cap': set a non-default positive_fragment "
+                         f"(e.g. Na) and leave negative_fragment at the default -OH ([O, H]).")
+
+
 @dataclass
 class SaturationSpec:
     enabled: bool = False
     num_samples: int = 250
+    positive_fragment: tuple = DEFAULT_POS_FRAGMENT
+    negative_fragment: tuple = DEFAULT_NEG_FRAGMENT
+    mode: Optional[str] = None
 
     @classmethod
     def from_dict(cls, d: dict, where: str) -> "SaturationSpec":
         d = _as_dict(d, where)
-        _check_keys(d, {"enabled", "num_samples"}, where)
+        _check_keys(d, {"enabled", "num_samples", "positive_fragment", "negative_fragment",
+                        "mode"}, where)
+        pos = _parse_fragment(d.get("positive_fragment", list(DEFAULT_POS_FRAGMENT)),
+                              f"{where}.positive_fragment")
+        neg = _parse_fragment(d.get("negative_fragment", list(DEFAULT_NEG_FRAGMENT)),
+                              f"{where}.negative_fragment")
+        mode = d.get("mode")
+        if mode is not None:
+            mode = _check_choice(mode, {"neutral", "anion_cap", "cation_cap"}, f"{where}.mode")
+            _validate_mode(mode, pos, neg, where)
         return cls(enabled=bool(d.get("enabled", False)),
-                   num_samples=int(d.get("num_samples", 250)))
+                   num_samples=int(d.get("num_samples", 250)),
+                   positive_fragment=pos, negative_fragment=neg, mode=mode)
+
+
+def _saturation_fragment_elements(sat_block: Optional[dict]) -> set:
+    """Element symbols named in the saturation block's fragments, so the run's element tables
+    include them (a non-network cap like F/Na needs distance/cutoff rows and an oxidation).
+    Returns the full set; the caller subtracts the network elements to find the cap-only ones."""
+    if not sat_block or not isinstance(sat_block, dict):
+        return set()
+    elems: set = set()
+    for key in ("positive_fragment", "negative_fragment"):
+        raw = sat_block.get(key)
+        if raw is None:
+            continue
+        frag = [raw] if isinstance(raw, str) else list(raw)
+        elems.update(str(e) for e in frag)
+    return elems
+
+
+def _validate_fragments(sat: SaturationSpec, oxidation: dict, where: str) -> None:
+    """Saturation fragments must be 1-valent (the engine swaps whole caps, so a +1/-1 fragment
+    keeps the slab neutral), and a non-default fragment must be a single atom (the -OH default
+    is the only multi-atom fragment supported). Net charge is summed from the run's oxidation."""
+    for label, frag, want, default in (
+            ("positive_fragment", sat.positive_fragment, +1, DEFAULT_POS_FRAGMENT),
+            ("negative_fragment", sat.negative_fragment, -1, DEFAULT_NEG_FRAGMENT)):
+        if frag != default and len(frag) != 1:
+            raise ValueError(f"{where}.{label}: a non-default fragment must be a single element "
+                             f"(1-valent cap); got {list(frag)}.")
+        charge = sum(oxidation[e] for e in frag)
+        if charge != want:
+            raise ValueError(f"{where}.{label}: fragment {list(frag)} has net formal charge "
+                             f"{charge:+d}, but saturation fragments must be 1-valent "
+                             f"({want:+d}).")
 
 
 @dataclass
@@ -557,20 +633,27 @@ def _validate_cutoff_overrides(overrides: dict, cfg: CoordinationConfig, where: 
 
 
 def _build_coordination(d: Optional[dict], where: str, *, elements, oxidation,
-                        spectators=()) -> CoordinationConfig:
+                        spectators=(), terminal_cn=()) -> CoordinationConfig:
     """Derive the covalent-radii distance tables + curated coordination defaults for the run's
     element set, then apply the partial user overrides (same merge convention as before).
 
     ``spectators`` are present-but-not-grown elements (a loaded foreign substrate); they get
-    distance/cutoff rows so placement and the graph work, without needing a curated CN/oxidation."""
+    distance/cutoff rows so placement and the graph work, without needing a curated CN/oxidation.
+    ``terminal_cn`` are non-network saturation-cap elements (e.g. F, Na used as fragments) that
+    are forced to a terminal CN of 1 -- so a placed cap is never flagged under-coordinated and
+    a curated network CN (e.g. Na's 4-6) doesn't apply to it. An explicit coordination-block
+    max_cn/min_cn for the same element still wins."""
     d = _as_dict(d, where) if d is not None else None
     if d is not None:
         _check_keys(d, {"max_cn", "min_cn", "cut_offs", "cn_distr", "oxidation", "distance"}, where)
     distance_knobs = _parse_distance_knobs(d["distance"], f"{where}.distance") if d and "distance" in d else None
-    max_cn_over = ({str(k): int(v) for k, v in _as_dict(d["max_cn"], f"{where}.max_cn").items()}
-                   if d and "max_cn" in d else {})
-    min_cn_over = ({str(k): int(v) for k, v in _as_dict(d["min_cn"], f"{where}.min_cn").items()}
-                   if d and "min_cn" in d else {})
+    terminal = {str(e): 1 for e in terminal_cn}
+    max_cn_over = {**terminal,
+                   **({str(k): int(v) for k, v in _as_dict(d["max_cn"], f"{where}.max_cn").items()}
+                      if d and "max_cn" in d else {})}
+    min_cn_over = {**terminal,
+                   **({str(k): int(v) for k, v in _as_dict(d["min_cn"], f"{where}.min_cn").items()}
+                      if d and "min_cn" in d else {})}
 
     tables = build_element_tables(elements, spectator_elements=spectators,
                                   distance_knobs=distance_knobs,
@@ -657,7 +740,13 @@ class RunConfig:
         # then derive the per-pair distance / coordination tables for that element set.
         comp_parsed = _parse_composition_block(d["composition"], "composition")
         coord_block = _as_dict(d["coordination"], "coordination") if d.get("coordination") is not None else None
-        elements = sorted(comp_parsed["elements"] | {"O", "H"} | _coord_override_elements(coord_block))
+        # Saturation fragments may name non-network cap elements (e.g. F, Na): they must be in
+        # the element tables (distance/cutoff rows + an oxidation) and are forced to a terminal
+        # CN of 1, so a placed cap is never re-flagged under-coordinated.
+        sat_block = _as_dict(d["saturation"], "saturation") if d.get("saturation") is not None else None
+        cap_elems = _saturation_fragment_elements(sat_block) - (comp_parsed["elements"] | {"O", "H"})
+        elements = sorted(comp_parsed["elements"] | {"O", "H"}
+                          | _coord_override_elements(coord_block) | cap_elems)
         oxidation = _resolve_oxidation(elements, coord_block, "coordination")
         composition = _finalize_composition(comp_parsed, oxidation, "composition")
         # A loaded substrate's elements are present-but-not-grown spectators: they need
@@ -665,10 +754,12 @@ class RunConfig:
         spectators = _loaded_elements(_as_dict(d["structure"], "structure")) - set(elements)
         coordination = _build_coordination(coord_block, "coordination",
                                            elements=elements, oxidation=oxidation,
-                                           spectators=sorted(spectators))
+                                           spectators=sorted(spectators),
+                                           terminal_cn=sorted(cap_elems))
 
         calculators = CalculatorsSpec.from_dict(d["calculators"], "calculators")
         saturation = SaturationSpec.from_dict(d.get("saturation", {}), "saturation")
+        _validate_fragments(saturation, oxidation, "saturation")
         _check_bks_supported(calculators, set(composition.target_counts),
                              saturation.enabled, "calculators")
 

@@ -18,10 +18,11 @@ import numpy as np
 from base.initialize import initialize_structure_blank, initialize_structure_file
 from base.limits import make_limit_flat, make_limits_fourier, fix_limits
 from growth.new_growth import grow_structure, finalize_structure
-from saturation.new_sat import saturate_under_coordinated, correct_charge
+from saturation.new_sat import saturate_under_coordinated, correct_charge, relabel_caps
 from rules import PeriodicStructureModifier, AvoidMotifSwapRule, MinimumDistanceRule
 
-from .config import RunConfig, RunSpec, CalculatorSpec, LimitSideSpec, load_config
+from .config import (RunConfig, RunSpec, CalculatorSpec, LimitSideSpec, load_config,
+                     DEFAULT_NEG_FRAGMENT, DEFAULT_POS_FRAGMENT)
 
 _EXT = {"vasp": "vasp", "xyz": "xyz"}
 
@@ -185,12 +186,20 @@ def _generate_one(cfg: RunConfig, seed: int, roughness: Optional[float],
     _finalize(growth_calc)
 
     if cfg.saturation.enabled:
-        saturate_under_coordinated(struct, num_samples=cfg.saturation.num_samples)
+        sat = cfg.saturation
+        saturate_under_coordinated(struct, num_samples=sat.num_samples)
         _finalize(sat_calc)
         if cfg.charge_correction.enabled:
             cc = cfg.charge_correction
             correct_charge(struct, max_iterations=cc.max_iterations,
                            num_samples=cc.num_samples, move_alpha=cc.move_alpha)
+            _finalize(sat_calc)
+        # Swap the engine's -OH/H reference caps for the run's fragments (e.g. F, Na). No-op for
+        # the default OH/H, so the default path's geometry and relax cost are unchanged.
+        if (sat.negative_fragment != DEFAULT_NEG_FRAGMENT
+                or sat.positive_fragment != DEFAULT_POS_FRAGMENT):
+            relabel_caps(struct, negative_fragment=sat.negative_fragment,
+                         positive_fragment=sat.positive_fragment)
             _finalize(sat_calc)
 
     if cfg.rules:

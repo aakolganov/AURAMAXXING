@@ -242,3 +242,75 @@ def test_bad_calculator_type_raises():
     d["calculators"]["growth"] = {"type": "vasp"}
     with pytest.raises(ValueError, match="type"):
         load_config(d)
+
+
+# --- saturation fragments (capping modes a/b/c) -----------------------------------------
+
+def _minimal_mace():
+    # saturation/relabel needs an MLIP backend (BKS can't relax H/F/Na), so grow with mace.
+    d = _minimal()
+    d["calculators"] = {"growth": {"type": "mace", "mace_model_path": "medium"}}
+    return d
+
+
+def test_saturation_fragment_defaults():
+    cfg = load_config(_minimal_mace())
+    assert cfg.saturation.positive_fragment == ("H",)
+    assert cfg.saturation.negative_fragment == ("O", "H")
+    # no extra cap elements registered for the default OH/H
+    assert "F" not in cfg.coordination.oxidation and "Na" not in cfg.coordination.oxidation
+
+
+def test_anion_cap_registers_fragment_element_terminal():
+    d = _minimal_mace()
+    d["saturation"] = {"enabled": True, "negative_fragment": "F"}
+    cfg = load_config(d)
+    assert cfg.saturation.negative_fragment == ("F",)
+    # F gets an oxidation and a terminal CN of 1 so a placed cap isn't flagged under-coordinated
+    assert cfg.coordination.oxidation["F"] == -1
+    assert cfg.coordination.max_cn["F"] == 1 and cfg.coordination.min_cn["F"] == 1
+
+
+def test_cation_cap_forces_terminal_cn_over_curated():
+    d = _minimal_mace()
+    d["saturation"] = {"enabled": True, "positive_fragment": "Na"}
+    cfg = load_config(d)
+    assert cfg.saturation.positive_fragment == ("Na",)
+    assert cfg.coordination.oxidation["Na"] == 1
+    # Na is a curated network former (CN 4-6); as a cap it must be terminal (1)
+    assert cfg.coordination.max_cn["Na"] == 1 and cfg.coordination.min_cn["Na"] == 1
+
+
+def test_fragment_must_be_one_valent():
+    d = _minimal_mace()
+    d["saturation"] = {"enabled": True, "negative_fragment": "O"}   # O alone is -2
+    with pytest.raises(ValueError, match="1-valent"):
+        load_config(d)
+
+
+def test_non_default_fragment_must_be_single_atom():
+    d = _minimal_mace()
+    d["saturation"] = {"enabled": True, "negative_fragment": ["F", "F"]}
+    with pytest.raises(ValueError, match="single element"):
+        load_config(d)
+
+
+def test_mode_inconsistent_with_fragments_raises():
+    d = _minimal_mace()
+    d["saturation"] = {"enabled": True, "mode": "anion_cap", "positive_fragment": "Na"}
+    with pytest.raises(ValueError, match="anion_cap"):
+        load_config(d)
+
+
+def test_uncurated_cap_element_needs_overrides():
+    d = _minimal_mace()
+    d["saturation"] = {"enabled": True, "negative_fragment": "Br"}
+    with pytest.raises(ValueError, match="Br"):
+        load_config(d)
+
+
+def test_saturation_with_lammps_rejected_for_any_fragment():
+    d = _minimal()   # growth is lammps
+    d["saturation"] = {"enabled": True, "negative_fragment": "F"}
+    with pytest.raises(ValueError, match="lammps|BKS|saturation"):
+        load_config(d)

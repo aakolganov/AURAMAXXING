@@ -142,3 +142,67 @@ def test_correct_charge_neutralises_positive_slab(make_struct, seed):
     assert s.charge() == 10
     correct_charge(s, max_iterations=200)
     assert s.charge() == 0
+
+
+# --- fragment relabel: swap the engine's -OH/H reference caps for 1-valent fragments -------
+# The saturation/charge engine always caps with -OH (cations) and H (anions) and tags the
+# added atoms (cap_role). relabel_caps swaps those for the run's fragments, charge-preserving
+# because every fragment is 1-valent (OH and F are both -1; H and Na are both +1).
+
+@pytest.fixture
+def make_struct_caps():
+    """Build a seeded struct whose coordination tables also carry F/Na as terminal (CN 1) cap
+    elements, so relabel targets have distance/cutoff rows and an oxidation."""
+    import numpy as np
+    from base.amorphous_structure import AmorphousStruc_factory
+    from base.config import CoordinationConfig
+    from base.element_data import build_element_tables
+
+    def _make(symbols, positions, cell=(16.0, 16.0, 16.0), seed=0, caps=("F", "Na")):
+        elems = sorted(set(symbols) | {"O", "H"} | set(caps))
+        t = build_element_tables(elems, max_cn={e: 1 for e in caps}, min_cn={e: 1 for e in caps})
+        cfg = CoordinationConfig(max_cn=t["max_cn"], min_cn=t["min_cn"], cut_offs=t["cut_offs"],
+                                 sample_dist=t["sample_dist"], d_min_max=t["d_min_max"],
+                                 oxidation=t["oxidation"])
+        return AmorphousStruc_factory(symbols=list(symbols),
+                                      positions=np.asarray(positions, dtype=float),
+                                      cell=list(cell), pbc=True, seed=seed, config=cfg)
+    return _make
+
+
+def test_relabel_anion_cap_oh_to_f(make_struct_caps):
+    from saturation.new_sat import saturate_under_coordinated, correct_charge, relabel_caps
+    s = make_struct_caps(["O", "Si", "Si", "Si"],
+                         [[7, 7, 7], [8.6, 7, 7], [5.4, 7, 7], [7, 8.6, 7]], seed=5)
+    saturate_under_coordinated(s)
+    correct_charge(s, max_iterations=200)
+    n_oh = s.symbols.count("O") - 1          # OH oxygens added on top of the one network O
+    relabel_caps(s, negative_fragment=("F",), positive_fragment=("H",))
+    assert s.charge() == 0                    # OH(-1) -> F(-1) preserves neutrality
+    assert s.symbols.count("F") == n_oh       # every -OH group became an F
+    assert s.symbols.count("O") == 1          # only the network O remains
+
+
+def test_relabel_cation_cap_h_to_na(make_struct_caps):
+    from saturation.new_sat import saturate_under_coordinated, correct_charge, relabel_caps
+    from saturation.new_sat import POS_CAP
+    import numpy as np
+    s = make_struct_caps(["Si", "O", "O", "O"],
+                         [[7, 7, 7], [8.6, 7, 7], [5.4, 7, 7], [7, 8.6, 7]], seed=3)
+    saturate_under_coordinated(s)
+    correct_charge(s, max_iterations=200)
+    n_pos = int(np.sum(np.asarray(s.atoms.arrays["cap_role"]) == POS_CAP))
+    relabel_caps(s, negative_fragment=("O", "H"), positive_fragment=("Na",))
+    assert s.charge() == 0                    # H(+1) -> Na(+1) preserves neutrality
+    assert s.symbols.count("Na") == n_pos     # every standalone H cap became Na
+
+
+def test_relabel_default_is_noop(make_struct_caps):
+    from saturation.new_sat import saturate_under_coordinated, correct_charge, relabel_caps
+    s = make_struct_caps(["O", "Si", "Si", "Si"],
+                         [[7, 7, 7], [8.6, 7, 7], [5.4, 7, 7], [7, 8.6, 7]], seed=1)
+    saturate_under_coordinated(s)
+    correct_charge(s, max_iterations=200)
+    before = sorted(s.symbols)
+    relabel_caps(s, negative_fragment=("O", "H"), positive_fragment=("H",))
+    assert sorted(s.symbols) == before        # default OH/H -> no substitution

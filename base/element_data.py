@@ -33,6 +33,9 @@ OXIDE_ELEMENTS: dict[str, dict] = {
     # anion + hydrogen (match legacy OXIDATION_NEG / default_*_cn)
     "O":  {"oxidation": -2, "max_cn": 2, "min_cn": 2},
     "H":  {"oxidation": +1, "max_cn": 1, "min_cn": 1},
+    # terminal halides (monovalent anionic caps for the saturation stage)
+    "F":  {"oxidation": -1, "max_cn": 1, "min_cn": 1},
+    "Cl": {"oxidation": -1, "max_cn": 1, "min_cn": 1},
     # legacy cations (match OXIDATION_POS / default_*_cn exactly)
     "Si": {"oxidation": +4, "max_cn": 4, "min_cn": 4},
     "Al": {"oxidation": +3, "max_cn": 4, "min_cn": 3},

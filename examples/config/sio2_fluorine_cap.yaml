@@ -1,0 +1,35 @@
+# Amorphous SiO2 slab, surface cations capped with fluorine (mode b: anion_cap).
+#
+# The saturation engine runs the validated -OH / H scheme to a neutral slab, then swaps every
+# -OH group (on a cation, net -1) for a single F (net -1), preserving neutrality. Surface
+# oxygens keep their H. Fluorine binds only to the positively-charged (cation) sites.
+#
+#   python -m runner --dry-run examples/config/sio2_fluorine_cap.yaml   (validate only)
+#   python -m runner examples/config/sio2_fluorine_cap.yaml
+
+structure:
+  cell: [22.0, 22.0, 40.0]
+
+composition:
+  target_ratios: {Si: 1, O: 2}
+  target_number_atoms: 200
+
+limits:
+  bottom: {type: flat,    z: 12.0}
+  top:    {type: fourier, z_av: 24.0, alpha: 0.3}
+  fix: bottom
+
+calculators:
+  growth:     {type: lammps, dump_path: dump_lmp}     # BKS grows the Si/O network
+  saturation: {type: mace, mace_model_path: medium}   # MLIP relaxes the H/F caps (BKS cannot)
+
+saturation:
+  enabled: true
+  mode: anion_cap            # optional; asserts negative_fragment is set, positive stays H
+  negative_fragment: F       # cap cations with F instead of -OH (both are net -1)
+charge_correction: {enabled: true}
+
+run:
+  seeds: [0]
+  output_dir: output/sio2_fluorine_cap
+  output_format: vasp

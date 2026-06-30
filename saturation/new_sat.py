@@ -352,4 +352,104 @@ def correct_charge(
             f"the available over/under-coordinated sites (e.g. an isolated ion with no "
             f"counter-site to cap).")
 
-    
+
+def _relabel_target(fragment, default_chain):
+    """The single replacement element for a fragment, or ``None`` when it is the default chain
+    (so no relabel happens). ``fragment`` is an ordered element tuple/list, or ``None``."""
+    if fragment is None:
+        return None
+    frag = tuple(fragment)
+    if frag == tuple(default_chain):
+        return None
+    return frag[0]   # non-default fragments are a single atom (validated at config load)
+
+
+def _retype_and_reposition(amorphous_struct, idx, anchor_idx, target_sym, pos0, bond_lengths):
+    """Retype atom ``idx`` to ``target_sym`` and place it at the derived ``anchor``-``target``
+    bond length along the original anchor->idx direction (MIC), so the swapped cap stays where
+    it was but at a physical distance. ``pos0`` is the position snapshot taken before any
+    relabel edit (anchors are network atoms and are never retyped, so their rows stay valid)."""
+    cell = amorphous_struct.atoms.get_cell()
+    pbc = amorphous_struct.atoms.get_pbc()
+    vec, dist = find_mic(pos0[idx] - pos0[anchor_idx], cell, pbc)
+    bl = bond_lengths.get(target_sym) if bond_lengths else None
+    if bl is None:
+        bl = derive_bond_length(amorphous_struct.atoms[anchor_idx].symbol, target_sym)
+    if dist < 1e-6:
+        direction = amorphous_struct.rng.normal(size=3)
+        direction = direction / np.linalg.norm(direction)
+    else:
+        direction = vec / dist
+    amorphous_struct.replace_atom(target_sym, pos0[anchor_idx] + direction * bl, idx)
+
+
+def relabel_caps(amorphous_struct, negative_fragment=None, positive_fragment=None,
+                 bond_lengths=None):
+    """Swap the engine's reference caps for the run's 1-valent fragments, preserving the net
+    formal charge. The saturation/charge-correction stage always caps with the validated
+    reference fragments -OH (on cations, net -1) and H (on anions, net +1) and tags the added
+    atoms via ``cap_role``. Here:
+
+    - ``negative_fragment`` (a single anion element, e.g. "F") replaces each -OH group: the
+      tagged O is retyped to the target and repositioned; its H is removed. OH and any -1
+      fragment are both net -1, so charge is preserved.
+    - ``positive_fragment`` (a single cation element, e.g. "Na") replaces each standalone H
+      cap: the tagged H is retyped to the target and repositioned. H and any +1 fragment are
+      both net +1.
+
+    The OH/H defaults (``("O","H")`` / ``("H",)`` or ``None``) mean "leave as is", so the
+    default path is a no-op. Raises if the substitution did not preserve neutrality."""
+    target_neg = _relabel_target(negative_fragment, ("O", "H"))
+    target_pos = _relabel_target(positive_fragment, ("H",))
+    if target_neg is None and target_pos is None:
+        return
+
+    roles = amorphous_struct.atoms.arrays.get("cap_role")
+    if roles is None:
+        return
+    roles = np.asarray(roles)
+    graph = amorphous_struct.get_graph(force_rebuild=True)
+    pos0 = amorphous_struct.atoms.get_positions()
+    symbols = amorphous_struct.symbols
+    charge_before = amorphous_struct.charge()
+
+    # Collect the work from the original graph/indices first; retypes below keep indices stable
+    # (anchors are network atoms, never retyped) and the OH hydrogens are removed in one batch
+    # at the end, so recorded indices remain valid throughout.
+    pos_work = []   # (h_idx, anchor_idx)
+    if target_pos is not None:
+        for i in np.where(roles == POS_CAP)[0]:
+            i = int(i)
+            anchor = next((n for n in graph.neighbors(i)
+                           if amorphous_struct.oxidation.get(symbols[n], 0) < 0), None)
+            if anchor is not None:
+                pos_work.append((i, anchor))
+    neg_work = []   # (o_idx, cation_idx, h_idx_or_None)
+    if target_neg is not None:
+        for i in np.where(roles == NEG_CAP)[0]:
+            i = int(i)
+            nbrs = list(graph.neighbors(i))
+            h = next((n for n in nbrs if symbols[n] == "H"), None)
+            cat = next((n for n in nbrs if symbols[n] != "H"
+                        and amorphous_struct.oxidation.get(symbols[n], 0) > 0), None)
+            if cat is not None:
+                neg_work.append((i, cat, h))
+
+    for h_idx, anchor in pos_work:
+        _retype_and_reposition(amorphous_struct, h_idx, anchor, target_pos, pos0, bond_lengths)
+    remove = []
+    for o_idx, cat, h in neg_work:
+        _retype_and_reposition(amorphous_struct, o_idx, cat, target_neg, pos0, bond_lengths)
+        if h is not None:
+            remove.append(h)
+    if remove:
+        mask = np.zeros(len(amorphous_struct), dtype=bool)
+        mask[remove] = True
+        amorphous_struct.remove_atom(mask)
+
+    amorphous_struct.invalidate_graph()
+    final_charge = amorphous_struct.charge()
+    if final_charge != 0 and charge_before == 0:
+        raise ValueError(
+            f"relabel_caps changed the net formal charge from {charge_before} to {final_charge}; "
+            f"cap substitution must be charge-preserving (1-valent fragments only).")
