@@ -331,3 +331,51 @@ def test_saturation_with_lammps_rejected_for_any_fragment():
     d["saturation"] = {"enabled": True, "negative_fragment": "F"}
     with pytest.raises(ValueError, match="lammps|BKS|saturation"):
         load_config(d)
+
+
+def test_scalar_fragment_gives_clear_error_not_typeerror():
+    d = _minimal_mace()
+    d["saturation"] = {"enabled": True, "positive_fragment": 5}
+    with pytest.raises(ValueError, match="element symbol"):   # not a raw TypeError
+        load_config(d)
+
+
+def test_cn_distr_oxidation_on_cap_element_rejected_when_saturation_on():
+    d = _minimal_mace()
+    d["coordination"] = {"cn_distr": {"O": [{"cn": 2, "fraction": 0.5, "oxidation": -1}]}}
+    d["saturation"] = {"enabled": True}
+    with pytest.raises(ValueError, match="cap"):
+        load_config(d)
+
+
+def test_cn_distr_opposite_sign_oxidation_rejected():
+    d = _minimal_mace()
+    d["composition"] = {"formula": "Fe2O3", "total_atoms": 40}
+    d["coordination"] = {"cn_distr": {"Fe": [{"cn": 6, "fraction": 0.1, "oxidation": -1}]}}
+    with pytest.raises(ValueError, match="opposite sign"):
+        load_config(d)
+
+
+def test_cn_distr_same_sign_multivalent_oxidation_ok():
+    d = _minimal_mace()
+    d["composition"] = {"formula": "Fe2O3", "total_atoms": 40}
+    d["coordination"] = {"cn_distr": {"Fe": [{"cn": 6, "fraction": 0.1, "oxidation": 2}]}}
+    cfg = load_config(d)                                       # +2 vs base +3: same sign, allowed
+    assert cfg.coordination.cn_distr["Fe"][0]["oxidation"] == 2
+
+
+def test_bond_factor_threaded_to_coordination():
+    # D1: a custom distance bond_factor is carried on CoordinationConfig so caps use it too.
+    d = _minimal_mace()
+    d["coordination"] = {"distance": {"bond_factor": 1.2}}
+    cfg = load_config(d)
+    assert cfg.coordination.bond_factor == 1.2
+
+
+def test_disabled_saturation_ignores_misconfigured_fragment():
+    # C2: a disabled saturation block must not validate/wire its fragments (consistent with the
+    # saturation BKS guard, which is gated on enabled). O alone is -2 (not 1-valent) but ignored.
+    d = _minimal_mace()
+    d["saturation"] = {"enabled": False, "negative_fragment": "O"}
+    cfg = load_config(d)
+    assert cfg.saturation.enabled is False

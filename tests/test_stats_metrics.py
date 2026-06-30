@@ -56,8 +56,8 @@ def test_homo_distance_flags_bonds_below_cutoff():
 
 def test_element_O_nearest_distance():
     m = analyze_structure(_center_with(TETRA, bond=1.7))
-    assert m["element_O_distance"]["Si"][0] == pytest.approx(1.7, abs=1e-6)
-    assert "O" not in m["element_O_distance"]    # O is the anion, not a subject here
+    assert m["element_anion_distance"]["Si"][0] == pytest.approx(1.7, abs=1e-6)
+    assert "O" not in m["element_anion_distance"]    # O is the anion, not a subject here
 
 
 def test_saturation_cap_counting():
@@ -84,6 +84,34 @@ def test_saturation_cap_metric_counts_halide():
     m = analyze_structure(s, is_saturation=True)
     assert m["saturation"]["cap_distances"]["Si-F"][0] == pytest.approx(1.6, abs=1e-6)
     assert m["saturation"]["caps_per_cation"]["Si"] == [1]
+
+
+def test_caps_per_cation_counts_non_h_completing_cap():
+    # B3: caps_per_cation must accept any monovalent completing cap, not only H. Si-O-Na (the O
+    # is finished by an Na cap) should count as one cap on the Si.
+    from base.config import CoordinationConfig
+    from base.element_data import build_element_tables
+    t = build_element_tables(["Si", "O", "H", "Na"], max_cn={"Na": 1}, min_cn={"Na": 1})
+    cfg = CoordinationConfig(max_cn=t["max_cn"], min_cn=t["min_cn"], cut_offs=t["cut_offs"],
+                             sample_dist=t["sample_dist"], d_min_max=t["d_min_max"],
+                             oxidation=t["oxidation"])
+    s = AmorphousStruc_factory(symbols=["Si", "O", "Na"],
+                               positions=[[5, 5, 5], [6.6, 5, 5], [8.6, 5, 5]],
+                               cell=[CELL] * 3, pbc=True, seed=0, config=cfg)
+    m = analyze_structure(s, is_saturation=True)
+    assert m["saturation"]["caps_per_cation"]["Si"] == [1]
+
+
+def test_pooling_tolerates_pre_rename_metrics():
+    # B1: a pre-rename metrics.json (oh_distances/oh_per_element) must pool/summarize as empty
+    # rather than KeyError-ing the whole pooled report.
+    old = {"n_atoms": 2, "n_fixed": 0, "composition": {"Si": 1, "O": 1}, "coordination": {},
+           "homo_distance": {}, "element_anion_distance": {}, "tau4": {},
+           "saturation": {"oh_distances": [0.97], "oh_per_element": {"Si": [1]}}}
+    merged = merge_metrics([old, old])              # must not raise
+    assert merged["n_structures"] == 2
+    s = summarize(old)                              # must not raise
+    assert s["cap_distance"] == {} and s["caps_per_cation_mean"] == {}
 
 
 def test_edge_cases_do_not_crash():

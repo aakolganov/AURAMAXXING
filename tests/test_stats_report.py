@@ -4,7 +4,7 @@ import json
 from base.amorphous_structure import AmorphousStruc_factory
 from stats import write_report, write_pooled_report, analyze_structure
 
-GEN_PNGS = {"coordination.png", "homo_element_distance.png", "element_O_distance.png", "tau4.png"}
+GEN_PNGS = {"coordination.png", "homo_element_distance.png", "element_anion_distance.png", "tau4.png"}
 SAT_PNGS = GEN_PNGS | {"cap_distance.png", "caps_per_cation.png"}
 
 
@@ -59,6 +59,28 @@ def test_pool_reports_from_dir_needs_two(tmp_path):
     from stats import write_metrics, pool_reports_from_dir
     write_metrics(tmp_path / "only", analyze_structure(_struct()))
     assert pool_reports_from_dir(tmp_path) is None          # nothing to pool from one
+
+
+def test_cli_counts_halide_caps_on_reread(tmp_path):
+    # B2: re-reading a halide-capped POSCAR via the CLI must build curated tables so the F cap
+    # is bonded (degree 1) and counted -- the module-default tables only know Si/Al/O/H.
+    import json
+    from base.config import CoordinationConfig
+    from base.element_data import build_element_tables
+    from stats.__main__ import main
+    t = build_element_tables(["Si", "O", "H", "F"], max_cn={"F": 1}, min_cn={"F": 1})
+    cfg = CoordinationConfig(max_cn=t["max_cn"], min_cn=t["min_cn"], cut_offs=t["cut_offs"],
+                             sample_dist=t["sample_dist"], d_min_max=t["d_min_max"],
+                             oxidation=t["oxidation"])
+    s = AmorphousStruc_factory(symbols=["Si", "F"], positions=[[5, 5, 5], [6.6, 5, 5]],
+                               cell=[20.0] * 3, pbc=True, seed=0, config=cfg)
+    poscar = tmp_path / "POSCAR"
+    s.atoms.write(str(poscar), format="vasp")
+    out = tmp_path / "out"
+    rc = main([str(poscar), "--saturation", "--out", str(out)])
+    assert rc == 0
+    data = json.loads((out / "stats.json").read_text())
+    assert "Si-F" in data["summary"]["cap_distance"]   # F cap recognised on bare re-read
 
 
 def test_cli_on_structure_file(tmp_path):

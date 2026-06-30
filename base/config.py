@@ -45,3 +45,6 @@ class CoordinationConfig:
     d_min_max: dict = field(default_factory=default_d_min_max.copy)
     cn_distr: dict = field(default_factory=default_cn_distr.copy)
     oxidation: dict = field(default_factory=default_oxidation.copy)
+    # Covalent-radii bond-window scale (centre = bond_factor*(r_a+r_b)); the saturation stage
+    # uses it so caps are placed at the same scale as the grown network, not always 1.0x.
+    bond_factor: float = 1.0

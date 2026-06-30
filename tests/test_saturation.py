@@ -179,8 +179,10 @@ def test_relabel_anion_cap_oh_to_f(make_struct_caps):
     n_oh = s.symbols.count("O") - 1          # OH oxygens added on top of the one network O
     relabel_caps(s, negative_fragment=("F",), positive_fragment=("H",))
     assert s.charge() == 0                    # OH(-1) -> F(-1) preserves neutrality
-    assert s.symbols.count("F") == n_oh       # every -OH group became an F
-    assert s.symbols.count("O") == 1          # only the network O remains
+    assert s.symbols.count("F") >= 1          # -OH groups became F caps
+    # cap-O conservation: each of the n_oh cap oxygens is either retyped to F or (if the
+    # unrelaxed cluster left it bridging >1 cation) kept as oxide; plus the one network O.
+    assert s.symbols.count("F") + s.symbols.count("O") == n_oh + 1
 
 
 def test_relabel_cation_cap_h_to_na(make_struct_caps):
@@ -241,6 +243,42 @@ def test_relabel_preserves_a_nonzero_charge(make_struct_caps):
     assert s.symbols.count("F") == 1 and s.symbols.count("O") == 0
 
 
+def test_relabel_survives_split_oh_pair_no_crash(make_struct_caps):
+    # A1 regression: correct_charge's orphan-prune can delete a NEG_CAP O or its OH_H
+    # independently, so the NEG_CAP/OH_H counts can diverge. relabel must stay charge-balanced
+    # (pair one drop per retype) and NOT raise. Build two clean Si-O-H caps, then delete one H
+    # to force an imbalance (2 NEG_CAP O, 1 OH_H).
+    import numpy as np
+    from saturation.new_sat import relabel_caps, NEG_CAP, OH_H, CAP_NONE
+    s = make_struct_caps(["Si", "O", "H", "Si", "O", "H"],
+                         [[3, 3, 3], [4.6, 3, 3], [5.5, 3, 3],
+                          [10, 10, 10], [11.6, 10, 10], [12.5, 10, 10]], seed=0)
+    s.atoms.set_array("cap_role",
+                      np.array([CAP_NONE, NEG_CAP, OH_H, CAP_NONE, NEG_CAP, OH_H], dtype=int))
+    s.remove_atom([5])                       # drop one OH_H -> 2 NEG_CAP O but only 1 OH_H
+    c0 = s.charge()
+    relabel_caps(s, negative_fragment=("F",), positive_fragment=("H",))  # must not raise
+    assert s.charge() == c0                  # charge preserved despite the count imbalance
+    assert s.symbols.count("F") == 1         # only one O could be paired with an OH_H to drop
+
+
+def test_relabel_skips_bridging_cap_oxygen(make_struct_caps):
+    # A2 regression: a cap-O the relax pulled into a 2-cation bridge is not a clean terminal
+    # cap; retyping it to a 1-valent halide would bond F to two cations. It must be left as is.
+    import numpy as np
+    from saturation.new_sat import relabel_caps, NEG_CAP, OH_H, CAP_NONE
+    s = make_struct_caps(["Si", "Si", "O", "H"],
+                         [[3, 3, 3], [6.2, 3, 3], [4.6, 3, 3], [4.6, 3.9, 3]], seed=0)
+    s.atoms.set_array("cap_role", np.array([CAP_NONE, CAP_NONE, NEG_CAP, OH_H], dtype=int))
+    s.get_graph(force_rebuild=True)
+    assert s.get_cn(2) == 3                   # the cap-O bridges both Si and holds its H
+    c0 = s.charge()
+    relabel_caps(s, negative_fragment=("F",), positive_fragment=("H",))
+    assert s.charge() == c0
+    assert s.symbols.count("F") == 0          # bridging cap-O left as oxide, not retyped to F
+    assert s.symbols.count("O") == 1
+
+
 def test_saturation_is_data_driven_for_non_silica_cation(make_struct_caps):
     # A lone Ga (oxidation +3, a curated non-Si/Al cation) is under-coordinated and must be
     # capped with -OH from its oxidation sign alone -- proving saturation isn't Si/Al-hardcoded.
@@ -251,6 +289,18 @@ def test_saturation_is_data_driven_for_non_silica_cation(make_struct_caps):
     assert syms.count("O") == 1 and syms.count("H") == 1
     o = syms.index("O")
     assert s.atoms.arrays["cap_role"][o] == NEG_CAP
+
+
+def test_cap_bond_length_uses_struct_bond_factor(make_struct):
+    # D1: caps are placed at the run's bond_factor scale, not always 1.0x.
+    from saturation.new_sat import saturate_under_coordinated
+    from base.element_data import derive_bond_length
+    s = make_struct(["Si"], [[10, 10, 10]], cell=(20.0, 20.0, 20.0))
+    s.bond_factor = 1.3
+    saturate_under_coordinated(s)
+    syms = s.symbols
+    d_si_o = s.atoms.get_distance(syms.index("Si"), syms.index("O"), mic=True)
+    assert d_si_o == pytest.approx(derive_bond_length("Si", "O", bond_factor=1.3), abs=0.05)
 
 
 def test_derive_bond_length_matches_covalent_radii():
