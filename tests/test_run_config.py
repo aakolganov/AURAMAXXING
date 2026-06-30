@@ -302,6 +302,23 @@ def test_mode_inconsistent_with_fragments_raises():
         load_config(d)
 
 
+def test_cation_cap_mode_rejects_non_default_negative():
+    d = _minimal_mace()
+    d["saturation"] = {"enabled": True, "mode": "cation_cap", "negative_fragment": "F"}
+    with pytest.raises(ValueError, match="cation_cap"):
+        load_config(d)
+
+
+def test_neutral_mode_allows_both_fragments():
+    d = _minimal_mace()
+    d["saturation"] = {"enabled": True, "mode": "neutral",
+                       "negative_fragment": "F", "positive_fragment": "Na"}
+    cfg = load_config(d)
+    assert cfg.saturation.negative_fragment == ("F",)
+    assert cfg.saturation.positive_fragment == ("Na",)
+    assert cfg.coordination.oxidation["F"] == -1 and cfg.coordination.oxidation["Na"] == 1
+
+
 def test_uncurated_cap_element_needs_overrides():
     d = _minimal_mace()
     d["saturation"] = {"enabled": True, "negative_fragment": "Br"}

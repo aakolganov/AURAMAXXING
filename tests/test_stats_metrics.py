@@ -70,6 +70,22 @@ def test_saturation_cap_counting():
     assert m["saturation"]["caps_per_cation"]["Si"] == [1]
 
 
+def test_saturation_cap_metric_counts_halide():
+    # A Si-F terminal cap (not a hydroxyl): the cap metric must see it via the data-driven
+    # anion/cation sets -- Si-F as a cap bond and one cap on the Si.
+    from base.config import CoordinationConfig
+    from base.element_data import build_element_tables
+    t = build_element_tables(["Si", "O", "H", "F"], max_cn={"F": 1}, min_cn={"F": 1})
+    cfg = CoordinationConfig(max_cn=t["max_cn"], min_cn=t["min_cn"], cut_offs=t["cut_offs"],
+                             sample_dist=t["sample_dist"], d_min_max=t["d_min_max"],
+                             oxidation=t["oxidation"])
+    s = AmorphousStruc_factory(symbols=["Si", "F"], positions=[[5, 5, 5], [6.6, 5, 5]],
+                               cell=[CELL] * 3, pbc=True, seed=0, config=cfg)
+    m = analyze_structure(s, is_saturation=True)
+    assert m["saturation"]["cap_distances"]["Si-F"][0] == pytest.approx(1.6, abs=1e-6)
+    assert m["saturation"]["caps_per_cation"]["Si"] == [1]
+
+
 def test_edge_cases_do_not_crash():
     # single atom of an element (no homo pairs), no 4-coordinate atoms
     s = AmorphousStruc_factory(symbols=["Si", "O"], positions=[[5, 5, 5], [6.6, 5, 5]],

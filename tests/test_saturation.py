@@ -206,3 +206,58 @@ def test_relabel_default_is_noop(make_struct_caps):
     before = sorted(s.symbols)
     relabel_caps(s, negative_fragment=("O", "H"), positive_fragment=("H",))
     assert sorted(s.symbols) == before        # default OH/H -> no substitution
+
+
+def test_relabel_neutral_both_fragments(make_struct_caps):
+    from saturation.new_sat import saturate_under_coordinated, correct_charge, relabel_caps
+    s = make_struct_caps(["O", "Si", "Si", "Si"],
+                         [[7, 7, 7], [8.6, 7, 7], [5.4, 7, 7], [7, 8.6, 7]], seed=7)
+    saturate_under_coordinated(s)
+    correct_charge(s, max_iterations=200)
+    relabel_caps(s, negative_fragment=("F",), positive_fragment=("Na",))
+    assert s.charge() == 0                     # both swaps are charge-preserving (mode a)
+    # mode a caps both sublattices: F on cations, Na on anions (this slab has cation caps)
+    assert s.symbols.count("F") >= 1
+
+
+def test_relabel_without_caps_is_noop(make_struct_caps):
+    # No saturation was run, so there is no cap_role array: relabel must be a safe no-op.
+    from saturation.new_sat import relabel_caps
+    s = make_struct_caps(["Si", "O", "O"], [[7, 7, 7], [8.6, 7, 7], [5.4, 7, 7]], seed=0)
+    before = sorted(s.symbols)
+    relabel_caps(s, negative_fragment=("F",), positive_fragment=("Na",))
+    assert sorted(s.symbols) == before
+
+
+def test_relabel_preserves_a_nonzero_charge(make_struct_caps):
+    # relabel only guards that it does not *break* neutrality; on an already-charged slab
+    # (no charge-correction run) it must still substitute and keep the same net charge.
+    from saturation.new_sat import saturate_under_coordinated, relabel_caps
+    s = make_struct_caps(["Si"], [[8, 8, 8]], seed=0)
+    saturate_under_coordinated(s)              # lone Si -> Si-O-H, net charge +4-2+1 = +3
+    assert s.charge() == 3
+    relabel_caps(s, negative_fragment=("F",), positive_fragment=("H",))
+    assert s.charge() == 3                      # OH(-1) -> F(-1): charge unchanged, no raise
+    assert s.symbols.count("F") == 1 and s.symbols.count("O") == 0
+
+
+def test_saturation_is_data_driven_for_non_silica_cation(make_struct_caps):
+    # A lone Ga (oxidation +3, a curated non-Si/Al cation) is under-coordinated and must be
+    # capped with -OH from its oxidation sign alone -- proving saturation isn't Si/Al-hardcoded.
+    from saturation.new_sat import saturate_under_coordinated, NEG_CAP
+    s = make_struct_caps(["Ga"], [[8, 8, 8]], seed=0)
+    saturate_under_coordinated(s)
+    syms = s.symbols
+    assert syms.count("O") == 1 and syms.count("H") == 1
+    o = syms.index("O")
+    assert s.atoms.arrays["cap_role"][o] == NEG_CAP
+
+
+def test_derive_bond_length_matches_covalent_radii():
+    from base.element_data import derive_bond_length
+    from ase.data import atomic_numbers, covalent_radii
+    expected = float(covalent_radii[atomic_numbers["Si"]] + covalent_radii[atomic_numbers["O"]])
+    assert derive_bond_length("Si", "O") == pytest.approx(expected, abs=1e-9)
+    # symmetric and scaled by bond_factor
+    assert derive_bond_length("O", "H") == pytest.approx(derive_bond_length("H", "O"), abs=1e-12)
+    assert derive_bond_length("Si", "O", bond_factor=0.5) == pytest.approx(expected * 0.5, abs=1e-9)
