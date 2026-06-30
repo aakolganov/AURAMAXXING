@@ -33,6 +33,9 @@ OXIDE_ELEMENTS: dict[str, dict] = {
     # anion + hydrogen (match legacy OXIDATION_NEG / default_*_cn)
     "O":  {"oxidation": -2, "max_cn": 2, "min_cn": 2},
     "H":  {"oxidation": +1, "max_cn": 1, "min_cn": 1},
+    # terminal halides (monovalent anionic caps for the saturation stage)
+    "F":  {"oxidation": -1, "max_cn": 1, "min_cn": 1},
+    "Cl": {"oxidation": -1, "max_cn": 1, "min_cn": 1},
     # legacy cations (match OXIDATION_POS / default_*_cn exactly)
     "Si": {"oxidation": +4, "max_cn": 4, "min_cn": 4},
     "Al": {"oxidation": +3, "max_cn": 4, "min_cn": 3},
@@ -235,6 +238,20 @@ def derive_pair_distances(
         sample_dist[a] = RandomSample(windows)
         d_min_max[a] = dmm
     return sample_dist, d_min_max, pair_cutoffs
+
+
+def derive_bond_length(a: str, b: str, bond_factor: float | None = None) -> float:
+    """Covalent-radii bond length for an ``a``-``b`` pair, in Angstrom.
+
+    The same model used for the bond-sampling window centre in ``derive_pair_distances``
+    (``bond_factor * (r_a + r_b)``), exposed standalone so the saturation stage can place
+    caps at a coherent physical distance for *any* element pair -- including pairs the run's
+    ``sample_dist`` never holds (it only carries grown cation-anion pairs, not e.g. X-H or
+    X-F). ``bond_factor`` defaults to ``DEFAULT_DISTANCE_KNOBS['bond_factor']``.
+    """
+    if bond_factor is None:
+        bond_factor = DEFAULT_DISTANCE_KNOBS["bond_factor"]
+    return bond_factor * (_covalent_radius(a) + _covalent_radius(b))
 
 
 def build_element_tables(

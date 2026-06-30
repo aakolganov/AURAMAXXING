@@ -9,12 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from default_constants import OXIDATION_POS, OXIDATION_NEG
-
 THETA_T = 109.5   # ideal tetrahedral angle, for the tau4 indices
-_ANION = next(iter(OXIDATION_NEG))            # "O"
-# cations that can carry an -OH group (X-O-H); H itself is excluded.
-_OH_CATIONS = [e for e in OXIDATION_POS if e != "H"]
 
 
 def _tau4_indices(angles_deg: list[float]) -> tuple[float, float]:
@@ -43,6 +38,11 @@ def analyze_structure(struct, is_saturation: bool = False) -> dict:
     mobile = np.array([i not in fixed for i in range(n)], dtype=bool)
 
     elements = sorted(set(symbols.tolist()))
+    # Anion/cation identity is data-driven from the struct's per-element oxidation, so the
+    # metrics work for any oxide (not just Si/Al/O/H): anions have oxidation < 0, cations > 0.
+    ox = getattr(struct, "oxidation", {}) or {}
+    anions = {e for e, v in ox.items() if v < 0}
+    cations = {e for e, v in ox.items() if v > 0}
     out: dict = {
         "n_atoms": int(n),
         "n_fixed": int(len(fixed)),
@@ -81,16 +81,16 @@ def analyze_structure(struct, is_saturation: bool = False) -> dict:
             "homo_bond_count": homo_bonds,
         }
 
-    # 3) nearest element-O distance (mobile non-O subjects)
-    o_idx = np.where(symbols == _ANION)[0]
-    if len(o_idx) > 0:
+    # 3) nearest element-anion distance (mobile non-anion subjects; "element-O" for oxides)
+    anion_idx = np.where(np.isin(symbols, list(anions)))[0] if anions else np.array([], dtype=int)
+    if len(anion_idx) > 0:
         for el in elements:
-            if el == _ANION:
+            if el in anions:
                 continue
             subj = np.where((symbols == el) & mobile)[0]
             if len(subj) == 0:
                 continue
-            out["element_O_distance"][el] = [float(dmat[i, o_idx].min()) for i in subj]
+            out["element_O_distance"][el] = [float(dmat[i, anion_idx].min()) for i in subj]
 
     # 4) tau4 / tau4' for 4-coordinate mobile centres
     for el in elements:
@@ -106,28 +106,34 @@ def analyze_structure(struct, is_saturation: bool = False) -> dict:
         if t4:
             out["tau4"][el] = {"tau4": t4, "tau4_prime": t4p}
 
-    # 5) saturation-only: O-H distances and OH groups per cation
+    # 5) saturation-only: cap-bond distances + capping groups per cation. Generalised from the
+    # old O-H / -OH metric so any 1-valent cap (H, F, Na, ...) is reported, not just hydroxyl.
     if is_saturation:
-        oh_distances = []
-        for u, v in graph.edges():
-            pair = {symbols[u], symbols[v]}
-            if pair == {_ANION, "H"}:
-                oh_distances.append(float(dmat[u, v] if np.isfinite(dmat[u, v])
-                                          else atoms.get_distance(u, v, mic=True)))
-        oh_per_element: dict = {}
-        for el in _OH_CATIONS:
+        degrees = dict(graph.degree())
+        # A cap is a mobile, monovalent (max_cn 1) terminal atom -- H, F, Na, ...; record its
+        # bond to its single anchor, labelled "{anchor}-{cap}".
+        cap_distances: dict = {}
+        max_cn = getattr(struct, "max_cn", {}) or {}
+        for i in range(n):
+            if mobile[i] and degrees.get(i, 0) == 1 and max_cn.get(symbols[i], 99) == 1:
+                a = next(iter(graph.neighbors(i)))
+                d = dmat[i, a] if np.isfinite(dmat[i, a]) else atoms.get_distance(i, a, mic=True)
+                cap_distances.setdefault(f"{symbols[a]}-{symbols[i]}", []).append(float(d))
+        # Caps per cation: a neighbouring anion that is "finished" -- bonded to this cation and
+        # otherwise only to H (a hydroxyl -OH) or to nothing else (a terminal halide cap).
+        caps_per_cation: dict = {}
+        for el in sorted(cations):
             subj = np.where((symbols == el) & mobile)[0]
             if len(subj) == 0:
                 continue
             counts = []
             for i in subj:
-                n_oh = 0
-                for o in graph.neighbors(i):
-                    if symbols[o] == _ANION and any(symbols[h] == "H" for h in graph.neighbors(o)):
-                        n_oh += 1
-                counts.append(int(n_oh))
-            oh_per_element[el] = counts
-        out["saturation"] = {"oh_distances": oh_distances, "oh_per_element": oh_per_element}
+                n_cap = sum(1 for nb in graph.neighbors(i)
+                            if symbols[nb] in anions
+                            and all(symbols[o] == "H" for o in graph.neighbors(nb) if o != i))
+                counts.append(int(n_cap))
+            caps_per_cation[el] = counts
+        out["saturation"] = {"cap_distances": cap_distances, "caps_per_cation": caps_per_cation}
 
     return out
 
@@ -138,7 +144,7 @@ def merge_metrics(metrics_list: list) -> dict:
     merged: dict = {"n_atoms": 0, "n_fixed": 0, "n_structures": len(metrics_list),
                     "composition": {}, "coordination": {}, "homo_distance": {},
                     "element_O_distance": {}, "tau4": {}, "saturation": None}
-    sat_d, sat_c = [], {}
+    sat_d, sat_c = {}, {}
     for m in metrics_list:
         merged["n_atoms"] += m["n_atoms"]
         merged["n_fixed"] += m["n_fixed"]
@@ -159,11 +165,12 @@ def merge_metrics(metrics_list: list) -> dict:
             tgt["tau4"].extend(d["tau4"])
             tgt["tau4_prime"].extend(d["tau4_prime"])
         if m.get("saturation"):
-            sat_d.extend(m["saturation"]["oh_distances"])
-            for el, v in m["saturation"]["oh_per_element"].items():
+            for label, v in m["saturation"]["cap_distances"].items():
+                sat_d.setdefault(label, []).extend(v)
+            for el, v in m["saturation"]["caps_per_cation"].items():
                 sat_c.setdefault(el, []).extend(v)
     if sat_d or sat_c:
-        merged["saturation"] = {"oh_distances": sat_d, "oh_per_element": sat_c}
+        merged["saturation"] = {"cap_distances": sat_d, "caps_per_cation": sat_c}
     return merged
 
 
@@ -189,7 +196,7 @@ def summarize(metrics: dict) -> dict:
     }
     if metrics.get("saturation"):
         sat = metrics["saturation"]
-        s["oh_distance"] = _summary_stats(sat["oh_distances"])
-        s["oh_per_element_mean"] = {el: (float(np.mean(v)) if v else None)
-                                    for el, v in sat["oh_per_element"].items()}
+        s["cap_distance"] = {label: _summary_stats(v) for label, v in sat["cap_distances"].items()}
+        s["caps_per_cation_mean"] = {el: (float(np.mean(v)) if v else None)
+                                     for el, v in sat["caps_per_cation"].items()}
     return s

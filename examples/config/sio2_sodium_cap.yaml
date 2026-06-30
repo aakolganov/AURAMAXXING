@@ -1,0 +1,34 @@
+# Amorphous SiO2 slab, surface anions capped with sodium (mode c: cation_cap).
+#
+# The saturation engine runs the validated -OH / H scheme to a neutral slab, then swaps every
+# standalone H cap (on an anion, net +1) for a single Na (net +1), preserving neutrality.
+# Surface cations keep their -OH. Sodium binds only to the negatively-charged (anion) sites.
+#
+#   python -m runner --dry-run examples/config/sio2_sodium_cap.yaml   (validate only)
+
+structure:
+  cell: [22.0, 22.0, 40.0]
+
+composition:
+  target_ratios: {Si: 1, O: 2}
+  target_number_atoms: 200
+
+limits:
+  bottom: {type: flat,    z: 12.0}
+  top:    {type: fourier, z_av: 24.0, alpha: 0.3}
+  fix: bottom
+
+calculators:
+  growth:     {type: lammps, dump_path: dump_lmp}
+  saturation: {type: mace, mace_model_path: medium}
+
+saturation:
+  enabled: true
+  mode: cation_cap           # optional; asserts positive_fragment is set, negative stays -OH
+  positive_fragment: Na      # cap anions with Na instead of H (both are net +1)
+charge_correction: {enabled: true}
+
+run:
+  seeds: [0]
+  output_dir: output/sio2_sodium_cap
+  output_format: vasp

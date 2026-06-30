@@ -4,29 +4,52 @@ from base.amorphous_structure import AmorphousStruc
 import numpy as np
 from helpers.files_io import highlight_coordination
 from ase.geometry import find_mic
-from default_constants import (
-    OXIDATION_POS,
-    OVER_POS,
-    d_min_max,
-    El_O_BONDLENGTH,
-    O_H_BONDLENGTH,
-)
 from helpers.atom_placing import place_atom_sphere, place_atom_force, place_atom_terminal
+from base.element_data import derive_bond_length
 
-# Bond lengths used when attaching saturation groups: O onto an under-coordinated
-# Si/Al (El_O_BONDLENGTH ~ 1.63 A) and H onto an O (O_H_BONDLENGTH ~ 0.98 A).
-DEFAULT_SAT_BOND_LENGTHS = {"O": El_O_BONDLENGTH, "H": O_H_BONDLENGTH}
+# Cap-provenance tags stored per-atom in atoms.arrays["cap_role"] (0 = not a cap). They mark
+# which atoms were added as saturation caps so a later relabel pass can swap cap identities
+# unambiguously: NEG_CAP is the oxygen of an -OH group placed on a cation (an OH group is a
+# net -1 fragment), OH_H is that group's hydrogen, and POS_CAP is a standalone H placed on an
+# anion (a net +1 fragment). Tagging the -OH hydrogen explicitly (rather than finding it via
+# the bonding graph) lets the relabel balance an OH->F swap by *count* -- retype every NEG_CAP
+# O and drop every OH_H, equal in number by construction -- so a stretched O-H bond can't break
+# charge neutrality.
+CAP_NONE = 0
+POS_CAP = 1
+NEG_CAP = 2
+OH_H = 3
+
+
+def _set_cap_role(amorphous_struct, idx: int, role: int) -> None:
+    """Tag atom ``idx`` with a cap-provenance ``role`` (CAP_NONE/POS_CAP/NEG_CAP), creating
+    the per-atom ``cap_role`` array on first use. ASE zero-pads it on later appends, so an
+    untagged atom always reads back as CAP_NONE."""
+    if amorphous_struct.atoms.arrays.get("cap_role") is None:
+        amorphous_struct.atoms.set_array("cap_role",
+                                         np.zeros(len(amorphous_struct.atoms), dtype=int))
+    amorphous_struct.atoms.arrays["cap_role"][idx] = role
+
+
+def _cap_bond_length(amorphous_struct, anchor_idx: int, cap_sym: str, override) -> float:
+    """Bond length for placing ``cap_sym`` onto the atom at ``anchor_idx``: derived from
+    covalent radii for the (anchor, cap) element pair, unless ``override`` (a {cap: length}
+    dict) supplies one for ``cap_sym``. Per-pair derivation works for any element pair,
+    including X-H / X-F pairs the run's ``sample_dist`` never carries."""
+    if override is not None and cap_sym in override:
+        return override[cap_sym]
+    return derive_bond_length(amorphous_struct.atoms[anchor_idx].symbol, cap_sym)
 
 
 def _try_then_force_place(amorphous_struct, place_atom: str, attach_idx: int, *,
-                          num_samples: int, bond_lengths: dict) -> None:
-    """Attach ``place_atom`` to ``attach_idx`` at its saturation bond length: try the
-    collision-aware spherical placement first, and fall back to the always-succeeds
-    least-overlap placement if that is sterically blocked, so a cap is always added."""
+                          num_samples: int, bond_length: float) -> None:
+    """Attach ``place_atom`` to ``attach_idx`` at ``bond_length``: try the collision-aware
+    spherical placement first, and fall back to the always-succeeds least-overlap placement
+    if that is sterically blocked, so a cap is always added."""
     if not place_atom_sphere(amorphous_struct, atom_type=place_atom, idx_anchor=attach_idx,
-                             num_samples=num_samples, bond_length=bond_lengths[place_atom]):
+                             num_samples=num_samples, bond_length=bond_length):
         place_atom_force(amorphous_struct, atom_type=place_atom, idx_anchor=attach_idx,
-                         num_samples=num_samples, bond_length=bond_lengths[place_atom])
+                         num_samples=num_samples, bond_length=bond_length)
 
 
 def move_atom(
@@ -191,9 +214,11 @@ def saturate_under_coordinated(
         num_samples: int = 250,
         highlight_file: Optional[str] = None,
     ):
-    """ Does the basic saturation of atoms through adding OH to positively charged and H to negatively charged. Does not Optimize structure."""
-    if bond_lengths is None:
-        bond_lengths = DEFAULT_SAT_BOND_LENGTHS
+    """Basic saturation: cap each under-coordinated cation (positive oxidation) with an -OH
+    group and each under-coordinated anion (negative oxidation) with an H, and tag the added
+    atoms with their cap role. Does not optimize the structure. Cation vs anion is read from
+    the struct's per-element ``oxidation`` (data-driven, not a hardcoded Si/Al/O/H table);
+    ``bond_lengths`` optionally overrides the covalent-radii-derived cap bond lengths."""
     amorphous_struct.atoms.wrap()
 
     # Optional debug dump highlighting coordination defects; off by default so production
@@ -203,14 +228,25 @@ def saturate_under_coordinated(
     undr_cn = collect_over_or_under_cn_atoms(amorphous_struct, do_under=True)
 
     for sym, idx_list in undr_cn.items():
-        saturate_with_OH = sym in OXIDATION_POS
+        is_cation = amorphous_struct.oxidation.get(sym, 0) > 0
         for attach_idx in idx_list:
-            if saturate_with_OH:
+            if is_cation:
+                # negative fragment -OH: O on the cation (tagged NEG_CAP), then H on that O.
+                bl = _cap_bond_length(amorphous_struct, attach_idx, "O", bond_lengths)
                 _try_then_force_place(amorphous_struct, "O", attach_idx,
-                                      num_samples=num_samples, bond_lengths=bond_lengths)
-                attach_idx = len(amorphous_struct) - 1 # to account for the 0 index
-            _try_then_force_place(amorphous_struct, "H", attach_idx,
-                                  num_samples=num_samples, bond_lengths=bond_lengths)
+                                      num_samples=num_samples, bond_length=bl)
+                attach_idx = len(amorphous_struct) - 1   # to account for the 0 index
+                _set_cap_role(amorphous_struct, attach_idx, NEG_CAP)
+                bl = _cap_bond_length(amorphous_struct, attach_idx, "H", bond_lengths)
+                _try_then_force_place(amorphous_struct, "H", attach_idx,
+                                      num_samples=num_samples, bond_length=bl)
+                _set_cap_role(amorphous_struct, len(amorphous_struct) - 1, OH_H)
+            else:
+                # positive fragment H on the anion (tagged POS_CAP).
+                bl = _cap_bond_length(amorphous_struct, attach_idx, "H", bond_lengths)
+                _try_then_force_place(amorphous_struct, "H", attach_idx,
+                                      num_samples=num_samples, bond_length=bl)
+                _set_cap_role(amorphous_struct, len(amorphous_struct) - 1, POS_CAP)
 
 
 def correct_charge(
@@ -222,49 +258,60 @@ def correct_charge(
     ):
     """ Creates a charge neutral surface through adding H and OH until correct. Add to over-coordinated atoms. Does not Optimize structure.
 
-    Each iteration changes the net formal charge by one unit toward zero, so a
-    neutral structure is normally reached in |charge| steps. `max_iterations` caps
-    the loop so it can never run away (e.g. if placement can never satisfy the
-    charge balance); a warning is printed if the cap is hit while still charged.
+    Each iteration breaks one bond and re-caps with an H/OH group, which should change
+    the net formal charge by one unit toward zero. It is not guaranteed to, though:
+    ``_prune_orphans_from_move`` can delete a charged atom the move orphaned (e.g. a -2 O
+    or a +1 H), so a single iteration can jump the charge by more than one and even
+    *overshoot* past zero -- after which there may be no candidate left to come back, and
+    the slab would ship charged. To stay robust we therefore *only commit an iteration that
+    strictly reduces ``abs(charge)``*: each attempt is taken on a snapshot and reverted if
+    it overshoots or makes no progress, and the next attempt re-draws a different
+    candidate (the rng has advanced). The loop can thus never cross zero. ``max_iterations``
+    caps the total attempts; ``max_stalls`` caps consecutive reverts so an unfixable slab
+    stops instead of spinning. If it still cannot reach neutrality, a clear error is raised
+    rather than silently returning a charged slab.
     """
-    if bond_lengths is None:
-        bond_lengths = DEFAULT_SAT_BOND_LENGTHS
-
     current_charge = amorphous_struct.charge()
     iteration = 0
+    stalls = 0
+    max_stalls = max(20, 4 * len(amorphous_struct))
     while current_charge != 0:
-        if iteration >= max_iterations:
-            print(f"correct_charge: reached max_iterations ({max_iterations}) with "
-                  f"net charge {current_charge}; stopping.")
+        if iteration >= max_iterations or stalls >= max_stalls:
             break
         iteration += 1
         if current_charge > 0:
-            # implied positive charge so move an over-coordinated atom which is positively charged
+            # too positive: break a bond at an over-coordinated ANION (oxidation < 0) and add
+            # the negative -OH cap to the freed cation neighbour (each cap is net -1).
             over_cn = collect_over_or_under_cn_atoms(amorphous_struct, do_under=False)
-            indices = [i for k, v in OVER_POS.items() if v and k in over_cn for i in over_cn[k]]
+            indices = [i for k, v in over_cn.items()
+                       if amorphous_struct.oxidation.get(k, 0) < 0 for i in v]
         else:
+            # too negative: break a bond at an under-coordinated CATION (oxidation > 0) and add
+            # the positive H cap to the freed anion neighbour (each cap is net +1).
             undr_cn = collect_over_or_under_cn_atoms(amorphous_struct, do_under=True)
-            indices = [i for k, v in OVER_POS.items() if not v and k in undr_cn for i in undr_cn[k]]
+            indices = [i for k, v in undr_cn.items()
+                       if amorphous_struct.oxidation.get(k, 0) > 0 for i in v]
 
         if len(indices) == 0:
             indices = find_tetrogonal_sites(amorphous_struct)
         if len(indices) == 0:
-            print("correct_charge: no candidate atoms left to adjust the charge; stopping.")
             break
 
         move = select_idx_for_move(amorphous_struct, indices)
         if move is None:
-            print("correct_charge: candidate atoms are all isolated (no neighbour to move "
-                  "against); stopping.")
             break
         chosen_idx_pos, idx_furthest = move
+
+        # Snapshot the atoms so an overshooting attempt can be reverted. We do NOT snapshot
+        # the rng, so the retry after a revert re-draws a different candidate/placement.
+        snapshot = amorphous_struct.atoms.copy()
         cn_before = amorphous_struct.get_cn()
         n_before = len(amorphous_struct)
         move_atom(
             amorphous_struct,
             idx_move=chosen_idx_pos,
             move_away_from=idx_furthest,
-            dist_move=d_min_max[amorphous_struct.atoms[chosen_idx_pos].symbol][amorphous_struct.atoms[idx_furthest].symbol][0]+0.2,
+            dist_move=amorphous_struct.d_min_max[amorphous_struct.atoms[chosen_idx_pos].symbol][amorphous_struct.atoms[idx_furthest].symbol][0]+0.2,
             alpha=move_alpha,
             )
 
@@ -274,18 +321,135 @@ def correct_charge(
         # meant to free a slot but is left as a no-op, so this only guards the bystanders.)
         attach_idx = idx_furthest
         if current_charge > 0:
+            bl = _cap_bond_length(amorphous_struct, attach_idx, "O", bond_lengths)
             place_atom_terminal(amorphous_struct, "O", attach_idx,
-                                bond_length=bond_lengths["O"], num_samples=num_samples)
+                                bond_length=bl, num_samples=num_samples)
             attach_idx = len(amorphous_struct) - 1
-        place_atom_terminal(amorphous_struct, "H", attach_idx,
-                            bond_length=bond_lengths["H"], num_samples=num_samples)
+            _set_cap_role(amorphous_struct, attach_idx, NEG_CAP)
+            bl = _cap_bond_length(amorphous_struct, attach_idx, "H", bond_lengths)
+            place_atom_terminal(amorphous_struct, "H", attach_idx,
+                                bond_length=bl, num_samples=num_samples)
+            _set_cap_role(amorphous_struct, len(amorphous_struct) - 1, OH_H)
+        else:
+            bl = _cap_bond_length(amorphous_struct, attach_idx, "H", bond_lengths)
+            place_atom_terminal(amorphous_struct, "H", attach_idx,
+                                bond_length=bl, num_samples=num_samples)
+            _set_cap_role(amorphous_struct, len(amorphous_struct) - 1, POS_CAP)
         # Drop any atom the move orphaned that the re-cap above failed to bond, so it can't
         # dangle in the output or crash a later iteration's move selection.
-        removed = _prune_orphans_from_move(amorphous_struct, cn_before, n_before)
-        if removed:
-            print(f"correct_charge: pruned {removed} atom(s) orphaned by a move and not re-capped")
-        current_charge = amorphous_struct.charge()
+        _prune_orphans_from_move(amorphous_struct, cn_before, n_before)
+
+        new_charge = amorphous_struct.charge()
+        if abs(new_charge) < abs(current_charge):
+            current_charge = new_charge          # genuine progress toward zero -- commit
+            stalls = 0
+        else:
+            # overshoot (crossed zero) or no progress: revert and retry a different candidate
+            amorphous_struct.atoms = snapshot
+            amorphous_struct.invalidate_graph()
+            stalls += 1
 
     amorphous_struct.sort_atoms()
+    final_charge = amorphous_struct.charge()
+    if final_charge != 0:
+        raise ValueError(
+            f"correct_charge could not neutralise the slab: net formal charge {final_charge} "
+            f"remains after {iteration} attempt(s). The charge balance is unsatisfiable with "
+            f"the available over/under-coordinated sites (e.g. an isolated ion with no "
+            f"counter-site to cap).")
 
-    
+
+def _relabel_target(fragment, default_chain):
+    """The single replacement element for a fragment, or ``None`` when it is the default chain
+    (so no relabel happens). ``fragment`` is an ordered element tuple/list, or ``None``."""
+    if fragment is None:
+        return None
+    frag = tuple(fragment)
+    if frag == tuple(default_chain):
+        return None
+    return frag[0]   # non-default fragments are a single atom (validated at config load)
+
+
+def _retype_and_reposition(amorphous_struct, idx, anchor_idx, target_sym, pos0, bond_lengths):
+    """Retype atom ``idx`` to ``target_sym``. With an ``anchor_idx`` (its surface partner) move
+    it to the derived anchor-target bond length along the original anchor->idx direction (MIC);
+    with ``anchor_idx is None`` (anchor not in the graph, e.g. a stretched bond) retype in place
+    and let the post-relabel relax fix the geometry. ``pos0`` is the position snapshot taken
+    before any relabel edit (anchors are network atoms, never retyped, so their rows stay valid).
+    Position is cosmetic only -- it never affects the formal charge."""
+    if anchor_idx is None:
+        amorphous_struct.replace_atom(target_sym, pos0[idx], idx)
+        return
+    cell = amorphous_struct.atoms.get_cell()
+    pbc = amorphous_struct.atoms.get_pbc()
+    vec, dist = find_mic(pos0[idx] - pos0[anchor_idx], cell, pbc)
+    bl = bond_lengths.get(target_sym) if bond_lengths else None
+    if bl is None:
+        bl = derive_bond_length(amorphous_struct.atoms[anchor_idx].symbol, target_sym)
+    if dist < 1e-6:
+        direction = amorphous_struct.rng.normal(size=3)
+        direction = direction / np.linalg.norm(direction)
+    else:
+        direction = vec / dist
+    amorphous_struct.replace_atom(target_sym, pos0[anchor_idx] + direction * bl, idx)
+
+
+def relabel_caps(amorphous_struct, negative_fragment=None, positive_fragment=None,
+                 bond_lengths=None):
+    """Swap the engine's reference caps for the run's 1-valent fragments, preserving the net
+    formal charge. The saturation/charge-correction stage always caps with the validated
+    reference fragments -OH (on cations, net -1) and H (on anions, net +1) and tags the added
+    atoms via ``cap_role`` (NEG_CAP oxygen + its OH_H hydrogen; POS_CAP hydrogen). Here:
+
+    - ``negative_fragment`` (a single anion element, e.g. "F") replaces each -OH group: every
+      NEG_CAP oxygen is retyped to the target and every OH_H hydrogen is removed. The two tag
+      sets are equal in number by construction (one H per O), so the swap is charge-balanced by
+      *count* -- it does not depend on pairing O to H through the bonding graph (a stretched
+      O-H bond used to leave an O retyped but its H not removed, breaking neutrality).
+    - ``positive_fragment`` (a single cation element, e.g. "Na") replaces each standalone H cap:
+      every POS_CAP hydrogen is retyped to the target (1-for-1, +1 -> +1).
+
+    The OH/H defaults (``("O","H")`` / ``("H",)`` or ``None``) mean "leave as is", so the
+    default path is a no-op. Raises if the substitution did not preserve the net charge."""
+    target_neg = _relabel_target(negative_fragment, ("O", "H"))
+    target_pos = _relabel_target(positive_fragment, ("H",))
+    if target_neg is None and target_pos is None:
+        return
+
+    roles = amorphous_struct.atoms.arrays.get("cap_role")
+    if roles is None:
+        return
+    roles = np.asarray(roles)
+    graph = amorphous_struct.get_graph(force_rebuild=True)
+    pos0 = amorphous_struct.atoms.get_positions()
+    symbols = amorphous_struct.symbols
+    charge_before = amorphous_struct.charge()
+
+    # Retypes keep indices stable (anchors are network atoms, never retyped); the OH hydrogens
+    # are removed in one batch at the end, so indices recorded here stay valid throughout.
+    remove = []
+    if target_neg is not None:
+        for i in np.where(roles == NEG_CAP)[0]:
+            i = int(i)
+            cat = next((n for n in graph.neighbors(i) if symbols[n] != "H"
+                        and amorphous_struct.oxidation.get(symbols[n], 0) > 0), None)
+            _retype_and_reposition(amorphous_struct, i, cat, target_neg, pos0, bond_lengths)
+        remove.extend(int(i) for i in np.where(roles == OH_H)[0])
+    if target_pos is not None:
+        for i in np.where(roles == POS_CAP)[0]:
+            i = int(i)
+            anchor = next((n for n in graph.neighbors(i)
+                           if amorphous_struct.oxidation.get(symbols[n], 0) < 0), None)
+            _retype_and_reposition(amorphous_struct, i, anchor, target_pos, pos0, bond_lengths)
+
+    if remove:
+        mask = np.zeros(len(amorphous_struct), dtype=bool)
+        mask[remove] = True
+        amorphous_struct.remove_atom(mask)
+
+    amorphous_struct.invalidate_graph()
+    final_charge = amorphous_struct.charge()
+    if final_charge != charge_before:
+        raise ValueError(
+            f"relabel_caps changed the net formal charge from {charge_before} to {final_charge}; "
+            f"cap substitution must be charge-preserving (1-valent fragments only).")

@@ -104,6 +104,58 @@ def test_statistics_per_structure_off_keeps_pooled(tmp_path, monkeypatch):
     assert (tmp_path / "out" / "coordination.png").exists()
 
 
+# --- saturation capping-mode wiring --------------------------------------------------
+
+def _sat_cfg(tmp_path, sat):
+    # growth=lammps + a mace saturation calc passes the BKS guard; build_calculator is
+    # monkeypatched to the LJ dummy in the tests below so no real backend is needed.
+    return load_config({
+        "structure": {"cell": [16.0, 16.0, 30.0]},
+        "composition": {"target_ratios": {"Si": 1, "O": 2}, "target_number_atoms": 45},
+        "limits": {"bottom": {"type": "flat", "z": 10.0},
+                   "top": {"type": "fourier", "z_av": 18.0, "alpha": 1.0}, "fix": "bottom"},
+        "calculators": {"growth": {"type": "lammps"},
+                        "saturation": {"type": "mace", "mace_model_path": "m"}},
+        "saturation": sat,
+        "charge_correction": {"enabled": True},
+        "run": {"output_dir": str(tmp_path / "out"), "seeds": [0]},
+    })
+
+
+def test_runner_threads_fragments_to_relabel(tmp_path, monkeypatch):
+    # The runner must pass the configured fragments to relabel_caps. Stub the saturation engine
+    # (so the test doesn't depend on correct_charge converging on LJ-relaxed geometry) and
+    # record the relabel call.
+    import runner.runner as RR
+    from tests.dummy_interface import DummyInterface
+    monkeypatch.setattr(RR, "build_calculator",
+                        lambda spec: DummyInterface(dump_path=str(tmp_path / "dump")))
+    monkeypatch.setattr(RR, "saturate_under_coordinated", lambda *a, **k: None)
+    monkeypatch.setattr(RR, "correct_charge", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr(RR, "relabel_caps", lambda struct, **kw: calls.append(kw))
+
+    RR.run_from_config(_sat_cfg(tmp_path, {"enabled": True, "negative_fragment": "F"}))
+    assert len(calls) == 1
+    assert calls[0]["negative_fragment"] == ("F",)
+    assert calls[0]["positive_fragment"] == ("H",)
+
+
+def test_runner_skips_relabel_for_default_caps(tmp_path, monkeypatch):
+    # Default -OH/H fragments -> relabel is a no-op and must not be invoked (or finalised again).
+    import runner.runner as RR
+    from tests.dummy_interface import DummyInterface
+    monkeypatch.setattr(RR, "build_calculator",
+                        lambda spec: DummyInterface(dump_path=str(tmp_path / "dump")))
+    monkeypatch.setattr(RR, "saturate_under_coordinated", lambda *a, **k: None)
+    monkeypatch.setattr(RR, "correct_charge", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr(RR, "relabel_caps", lambda struct, **kw: calls.append(kw))
+
+    RR.run_from_config(_sat_cfg(tmp_path, {"enabled": True}))   # default OH/H
+    assert calls == []
+
+
 # --- Phase 0: per-combo seeding, debug dumps, manifest -----------------------------
 
 def test_combo_seed_decorrelates_and_reproduces():

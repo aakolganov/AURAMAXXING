@@ -2,7 +2,7 @@
 
 **A**morphous s**U**rface **R**esearch **A**nd **M**odeling **A**nd o**X**ide e**X**ploration **I**ntegrated i**N** **G**eneration
 
-Tools to efficiently generate amorphous oxide surfaces with ASE. Bare-surface growth is composition-general (oxidation states, coordination numbers and bond-length distances are data-driven from a curated table + a covalent-radii model), relaxed with machine-learning potentials (MACE, UMA); a classical BKS/LAMMPS force field is kept as a lightweight generator for silica(-aluminas) only. (Chemical saturation is still Si/Al/O/H-specific.)
+Tools to efficiently generate amorphous oxide surfaces with ASE. Bare-surface growth *and* chemical saturation are composition-general (oxidation states, coordination numbers and bond-length distances are data-driven from a curated table + a covalent-radii model), relaxed with machine-learning potentials (MACE, UMA); a classical BKS/LAMMPS force field is kept as a lightweight generator for silica(-aluminas) only. Saturation caps are configurable 1-valent fragments (default –OH / H; or e.g. F, Na — see [Saturation](#saturation-capping-modes)).
 
 Contributors:
 
@@ -23,9 +23,10 @@ then chemically terminated. The pipeline stages:
 2. **Finalize** — `growth.new_growth.finalize_structure`: geometry optimization (LBFGS)
    with the chosen calculator.
 3. **Saturate** — `saturation.new_sat.saturate_under_coordinated`: cap under-coordinated
-   cations with –OH and anions with –H.
+   cations with –OH and anions with –H (data-driven from the per-element oxidation sign).
 4. **Charge-correct** — `saturation.new_sat.correct_charge`: add H / OH until the net
-   formal charge is zero.
+   formal charge is zero (and `relabel_caps` swaps the caps for the run's fragments, e.g.
+   F or Na — see [Saturation capping modes](#saturation-capping-modes)).
 5. **Rules (optional)** — `rules.PeriodicStructureModifier` applies structural rules such
    as `AvoidMotifSwapRule` (e.g. avoid Al–O–Al) and `MinimumDistanceRule`.
 
@@ -57,7 +58,9 @@ oxidation) — e.g. ~20% of Al grown at CN 6.
 
 Relax arbitrary oxides with an **MLIP** (MACE/UMA). The classical **BKS/LAMMPS** backend is a
 lightweight generator for **silica(-aluminas) only** (Si/Al/O) and raises a clear error for any
-other element. (Chemical saturation/charge-correction is currently Si/Al/O/H-specific.)
+other element — and, because saturation adds H, it can never be the saturation calculator.
+Chemical saturation/charge-correction is composition-general too (see
+[Saturation capping modes](#saturation-capping-modes)).
 
 ## Installation
 
@@ -191,6 +194,9 @@ finalize:                   # optional
   max_steps: 500
 
 saturation:        {enabled: false, num_samples: 250}
+# saturation caps default to –OH (cations) / H (anions); override with 1-valent fragments to
+# get the other modes, e.g.  {enabled: true, negative_fragment: F}  (F caps cations).
+# See "Saturation capping modes" below for the positive_fragment / negative_fragment / mode keys.
 charge_correction: {enabled: false, max_iterations: 1000, num_samples: 250, move_alpha: 0.5}
 
 statistics:        {enabled: true, per_structure: true, pooled: true}   # analysis plots + stats.json
@@ -216,6 +222,34 @@ to a per-run subdirectory (`output_dir/seed{seed}_alpha{alpha}/structure.<ext>`)
 combination is written straight to `output_dir/structure.<ext>`. Unknown or missing keys
 raise a clear error naming the offending path — use `--dry-run` to validate quickly without
 LAMMPS/MACE. See `examples/config/sio2.yaml` and `examples/config/siral70.yaml`.
+
+## Saturation capping modes
+
+Saturation always runs the validated, charge-neutralising **–OH / H** engine first, then
+swaps the cap identities for the run's **fragments**. Every fragment is **1-valent** (the
+engine swaps whole caps, so a +1/–1 fragment keeps the slab neutral), written as an ordered
+element list (the first atom bonds to the surface). Defaults: `positive_fragment: H` (caps
+anions, net +1) and `negative_fragment: [O, H]` (caps cations, net –1). Override one or both:
+
+| Mode | Config | Result |
+| --- | --- | --- |
+| **(a) neutral** | `negative_fragment: F` + `positive_fragment: Na` | cations → F, anions → Na (a net-neutral NaF pair) |
+| **(b) anion_cap** | `negative_fragment: F` (positive stays H) | electronegative cap on cations; anions keep H |
+| **(c) cation_cap** | `positive_fragment: Na` (negative stays –OH) | electropositive cap on anions; cations keep –OH |
+
+```yaml
+saturation:
+  enabled: true
+  mode: anion_cap            # optional; asserts the fragments match the named mode
+  negative_fragment: F       # e.g. cap surface cations with F instead of –OH
+charge_correction: {enabled: true}
+```
+
+A non-network cap element (F, Na, …) is auto-registered in the run's element tables with
+its oxidation and a terminal coordination of 1; F and Cl are curated, others need an
+`oxidation`/`min_cn`/`max_cn` entry in the `coordination` block. Because saturation adds
+H/F/Na, the cap relax needs an **MLIP** saturation calculator (BKS is rejected). See
+`examples/config/sio2_fluorine_cap.yaml`, `sio2_sodium_cap.yaml`, and `sio2_naf_cap.yaml`.
 
 ## Running in parallel (HPC)
 
@@ -273,8 +307,8 @@ a `stats.json` next to each structure, and a pooled set across the sweep in `out
 - **element_O_distance.png** — nearest element–O distance per element.
 - **tau4.png** — τ₄ and τ₄′ geometry indices for 4-coordinate centres (1 = tetrahedral,
   0 = square planar).
-- **oh_distance.png**, **oh_per_element.png** — saturation runs only: O–H distances and the
-  number of –OH groups per cation.
+- **cap_distance.png**, **caps_per_cation.png** — saturation runs only: cap bond-length
+  distributions per cap pair (O–H, Si–F, O–Na, …) and the number of capping groups per cation.
 
 For large ensembles, set `statistics.per_structure: false` to skip the per-structure plots
 (which multiply with every structure) while still getting the single pooled set; or
@@ -292,7 +326,7 @@ python -m runner config.yaml --pool-only   # gather metrics.json under output_di
 The same analysis runs standalone on any saved structure:
 
 ```bash
-python -m stats output/**/structure.vasp --out stats_dir   # add --saturation for the OH plots
+python -m stats output/**/structure.vasp --out stats_dir   # add --saturation for the cap plots
 ```
 (or `from stats import write_report` / `analyze_structure` in Python).
 
@@ -338,6 +372,9 @@ bottom limit).
 
 - `examples/config/sio2.yaml` — amorphous SiO₂ (BKS), single structure.
 - `examples/config/siral70.yaml` — Si/Al with a MACE saturation backend and a seed × roughness sweep.
+- `examples/config/sio2_fluorine_cap.yaml`, `sio2_sodium_cap.yaml`, `sio2_naf_cap.yaml` —
+  the three [saturation capping modes](#saturation-capping-modes) (F on cations, Na on anions,
+  a net-neutral NaF pair).
 - `examples/Generation/`, `examples/Saturation/` — equivalent scripted (Python) runs,
   including growth on a bare γ-Al₂O₃(110) substrate whose POSCAR `Selective Dynamics`
   (F F F) flags ASE reads into a `FixAtoms` constraint that keeps the substrate fixed.

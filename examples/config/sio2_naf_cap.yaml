@@ -1,0 +1,35 @@
+# Amorphous SiO2 slab capped with a net-neutral NaF pair (mode a: neutral).
+#
+# The negative fragment F (net -1) caps surface cations; the positive fragment Na (net +1)
+# caps surface anions. The pair is net-neutral (NaF), and because every -OH->F and H->Na swap
+# is charge-preserving the slab stays neutral. Use this when you want both sublattices capped.
+#
+#   python -m runner --dry-run examples/config/sio2_naf_cap.yaml   (validate only)
+
+structure:
+  cell: [22.0, 22.0, 40.0]
+
+composition:
+  target_ratios: {Si: 1, O: 2}
+  target_number_atoms: 200
+
+limits:
+  bottom: {type: flat,    z: 12.0}
+  top:    {type: fourier, z_av: 24.0, alpha: 0.3}
+  fix: bottom
+
+calculators:
+  growth:     {type: lammps, dump_path: dump_lmp}
+  saturation: {type: mace, mace_model_path: medium}
+
+saturation:
+  enabled: true
+  mode: neutral              # optional; both fragments may be overridden
+  negative_fragment: F       # caps cations (net -1)
+  positive_fragment: Na      # caps anions  (net +1)
+charge_correction: {enabled: true}
+
+run:
+  seeds: [0]
+  output_dir: output/sio2_naf_cap
+  output_format: vasp
