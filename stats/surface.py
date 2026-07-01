@@ -91,6 +91,12 @@ def sasa_surface_area(positions: np.ndarray, symbols, cell_dims, *, probe: float
     wpos = positions.copy()
     wpos[:, 0] %= Lx
     wpos[:, 1] %= Ly
+    # A sub-ULP-negative coordinate makes ``x % L`` round up to exactly L, which cKDTree(boxsize=...)
+    # rejects ("greater than the size of the periodic box"). Clamp strictly below L: nextafter(L, 0)
+    # is the largest float < L, so this nudges only that pathological ==L case and is a no-op on every
+    # in-box coordinate.
+    wpos[:, 0] = np.minimum(wpos[:, 0], np.nextafter(Lx, 0.0))
+    wpos[:, 1] = np.minimum(wpos[:, 1], np.nextafter(Ly, 0.0))
     tree = cKDTree(wpos, boxsize=[Lx, Ly, 0.0])
     unit = fibonacci_sphere(n_points)   # (n_points, 3), shared read-only cache
 
