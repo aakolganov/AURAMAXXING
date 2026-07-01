@@ -146,6 +146,32 @@ def test_correct_charge_neutralises_positive_slab(make_struct, seed):
     assert s.charge() == 0
 
 
+# --- break-and-cap must anchor each cap on the fragment's correct oxidation sign ---------
+# The -OH cap (net -1) must anchor on a CATION and the H cap (net +1) on an ANION. Anchoring on
+# the wrong sign still balances the net charge but builds a peroxide (O-O) / hydride (M-H) motif.
+# _break_and_cap_step used to cap `idx_furthest` unconditionally, and since the too-positive branch
+# feeds over-coordinated anions (high CN), that was usually the anion -> -OH on an anion (peroxide).
+
+@pytest.mark.parametrize("seed", range(6))
+def test_correct_charge_caps_anchor_on_correct_sign(make_struct, seed):
+    import numpy as np
+    from saturation.new_sat import correct_charge, NEG_CAP
+    # tricluster (charge +10) drives many break-and-cap -OH additions; every added cap-oxygen
+    # (NEG_CAP) must have >=1 cation neighbour (its intended anchor), never zero.
+    s = make_struct(["O", "Si", "Si", "Si"],
+                    [[7, 7, 7], [8.6, 7, 7], [5.4, 7, 7], [7, 8.6, 7]],
+                    cell=(16.0, 16.0, 16.0), seed=seed)
+    assert s.charge() == 10
+    correct_charge(s, max_iterations=200)
+    assert s.charge() == 0
+    g = s.get_graph(force_rebuild=True)
+    syms, ox = s.symbols, s.oxidation
+    roles = s.atoms.arrays["cap_role"]
+    for i in np.where(roles == NEG_CAP)[0]:
+        n_cation = sum(1 for nb in g.neighbors(i) if ox.get(syms[nb], 0) > 0)
+        assert n_cation >= 1, f"cap-O #{i} anchored with no cation neighbour (peroxide motif)"
+
+
 # --- fragment relabel: swap the engine's -OH/H reference caps for 1-valent fragments -------
 # The saturation/charge engine always caps with -OH (cations) and H (anions) and tags the
 # added atoms (cap_role). relabel_caps swaps those for the run's fragments, charge-preserving

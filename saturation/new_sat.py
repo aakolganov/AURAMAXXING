@@ -291,6 +291,25 @@ def _break_and_cap_step(amorphous_struct, current_charge, bond_lengths, num_samp
         return None
     chosen_idx_pos, idx_furthest = move
 
+    # Pick the cap anchor by the fragment's required oxidation sign, NOT by which move-pair member
+    # select_idx_for_move happened to order first: the -OH cap (current_charge > 0, net -1) must
+    # anchor on a CATION and the H cap (net +1) on an ANION. Capping the wrong-sign atom still
+    # balances the net charge but builds a peroxide (O-O) or hydride (M-H) motif -- and because the
+    # too-positive branch feeds over-coordinated anions (high CN), select_idx_for_move usually
+    # returns the anion as idx_furthest, so the old unconditional cap on idx_furthest put -OH on
+    # the anion. The moved atom and its pivot are opposite classes in the normal cation<->anion
+    # case, so one of them carries the wanted sign; if neither does (a homo-bonded defect), skip and
+    # let the caller's direct cap make progress instead of forcing a wrong-sign cap.
+    want_cation = current_charge > 0
+
+    def _wanted_sign(i: int) -> bool:
+        return (amorphous_struct.oxidation.get(amorphous_struct.atoms[i].symbol, 0) > 0) == want_cation
+
+    anchor = (idx_furthest if _wanted_sign(idx_furthest)
+              else chosen_idx_pos if _wanted_sign(chosen_idx_pos) else None)
+    if anchor is None:
+        return None
+
     snapshot = amorphous_struct.atoms.copy()
     cn_before = amorphous_struct.get_cn()
     n_before = len(amorphous_struct)
@@ -302,13 +321,14 @@ def _break_and_cap_step(amorphous_struct, current_charge, bond_lengths, num_samp
         alpha=move_alpha,
         )
 
-    # Cap with a bystander-aware placement: the cap bonds only its intended attach atom where
-    # possible, so a forced placement can't over-coordinate unrelated atoms (M2).
+    # Cap the correctly-signed anchor with a bystander-aware placement: the cap bonds only its
+    # intended attach atom where possible, so a forced placement can't over-coordinate unrelated
+    # atoms (M2).
     if current_charge > 0:
-        _place_neg_cap(amorphous_struct, idx_furthest, bond_lengths, num_samples,
+        _place_neg_cap(amorphous_struct, anchor, bond_lengths, num_samples,
                        place_atom_terminal)
     else:
-        _place_pos_cap(amorphous_struct, idx_furthest, bond_lengths, num_samples,
+        _place_pos_cap(amorphous_struct, anchor, bond_lengths, num_samples,
                        place_atom_terminal)
     _prune_orphans_from_move(amorphous_struct, cn_before, n_before)
 

@@ -101,6 +101,16 @@ def test_pbc_edge_atoms_are_neighbours():
     assert a < two_isolated * 0.98             # mutual burial across the periodic boundary
 
 
+def test_sub_ulp_negative_coordinate_does_not_crash():
+    # A boundary atom at a sub-ULP-negative x makes `x % L == L` exactly, which cKDTree(boxsize=...)
+    # rejects; the clamp must keep it strictly < L so a finite area is returned rather than a crash.
+    L = 14.237
+    pos = np.array([[-1e-16, 5.0, 8.0], [7.0, 6.0, 8.0]])
+    assert (-1e-16) % L == L                    # confirm the pathological wrap
+    a = sasa_surface_area(pos, ["O", "Si"], (L, L, 16.0), n_points=100)
+    assert np.isfinite(a) and a > 0
+
+
 # --- cap_areal_density arithmetic + struct wrapper ---------------------------------
 
 def test_cap_areal_density_arithmetic(make_struct):
