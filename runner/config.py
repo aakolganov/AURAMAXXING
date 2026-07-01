@@ -11,6 +11,7 @@ distributions, formal charges) stays in ``default_constants.py``.
 """
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from itertools import product
@@ -218,8 +219,18 @@ def _nearest_neutral_counts(x: dict, oxidation: dict, where: str):
                 best = (key, n)
         return best
 
+    # Grow the search box until it contains ANY neutral composition (an off-stoichiometry
+    # request may need a large adjustment before the charge-balance lattice is reachable), then
+    # expand once more to the radius that provably contains the *closest* one and search that.
+    # For the least-squares optimum n*, (n*_i - x_i)**2 <= cost so |n*_i - x_i| <= sqrt(cost),
+    # and n0 is within 0.5 of x, hence |n*_i - n0_i| <= sqrt(cost) + 0.5. Searching that radius
+    # returns the true nearest neutral composition rather than merely the first the growing box
+    # happened to hit (the old fixed (4, 8, 16) ladder both stopped short of the optimum and
+    # raised a spurious "single charge sign" error for reachable-but-distant compositions).
     best = None
-    for kmax in (4, 8, 16):
+    searched = 0
+    for kmax in (4, 8, 16, 32, 64, 128, 256):
+        searched = kmax
         best = search(kmax)
         if best is not None:
             break
@@ -228,6 +239,9 @@ def _nearest_neutral_counts(x: dict, oxidation: dict, where: str):
             f"{where}: cannot reach a charge-neutral integer composition for "
             f"{dict(zip(elems, ox))}; it must contain both cations (oxidation > 0) and "
             f"anions (oxidation < 0).")
+    guaranteed = min(512, int(math.ceil(math.sqrt(best[0][0]) + 0.5)))
+    if guaranteed > searched:
+        best = search(guaranteed)
     counts = {e: c for e, c in zip(elems, best[1])}
     requested = {e: c for e, c in zip(elems, n0)}
     return counts, requested, (best[1] != n0)
