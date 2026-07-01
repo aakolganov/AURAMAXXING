@@ -57,15 +57,17 @@ def test_correct_charge_noop_on_neutral(make_struct):
     assert s.charge() == 0
 
 
-def test_correct_charge_terminates_when_unsatisfiable(make_struct):
+def test_correct_charge_neutralises_lone_cation_via_fallback(make_struct):
     from saturation.new_sat import correct_charge
-    # a lone Si is charged (+4) but has no anion / tetrahedral site to attach to,
-    # so correct_charge cannot neutralise it. It must stop (not loop forever) AND must
-    # not silently ship a charged slab -- it raises rather than returning charged.
+    # A lone Si (+4) has no over/under/variable-CN site for the bond-break strategy, so the
+    # direct-cap fallback caps it with -OH four times -> Si(OH)4, charge 0. (This used to raise
+    # "unsatisfiable"; the fallback now neutralises any single charged cation/anion.)
     s = make_struct(["Si"], [[10, 10, 10]], cell=(20.0, 20.0, 20.0))
-    assert s.charge() != 0
-    with pytest.raises(ValueError, match="could not neutralise"):
-        correct_charge(s, max_iterations=50)
+    assert s.charge() == 4
+    correct_charge(s, max_iterations=50)
+    assert s.charge() == 0
+    syms = s.symbols
+    assert syms.count("O") == 4 and syms.count("H") == 4   # four -OH caps
 
 
 # --- isolated atoms must not crash charge-correction's move selection -------------
