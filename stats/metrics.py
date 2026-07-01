@@ -24,11 +24,14 @@ def _tau4_indices(angles_deg: list[float]) -> tuple[float, float]:
     return tau4, tau4_prime
 
 
-def analyze_structure(struct, is_saturation: bool = False) -> dict:
+def analyze_structure(struct, is_saturation: bool = False,
+                      surface_opts: dict | None = None) -> dict:
     """Compute the per-element distributions used by the plotting/report layer.
 
     Returns a dict of raw distributions (plain Python lists, JSON-friendly). When
-    ``is_saturation`` is False the ``saturation`` entry is ``None``.
+    ``is_saturation`` is False the ``saturation`` entry is ``None``. ``surface_opts`` (from
+    ``cfg.statistics.surface``: ``{enabled, probe, n_points, overrides}``) parameterises the
+    saturation-only cap areal-density metric; when omitted it uses defaults (enabled, probe 0).
     """
     atoms = struct.atoms
     n = len(atoms)
@@ -52,6 +55,7 @@ def analyze_structure(struct, is_saturation: bool = False) -> dict:
         "element_anion_distance": {},
         "tau4": {},
         "saturation": None,
+        "cap_areal_density": None,
     }
     if n == 0:
         return out
@@ -138,6 +142,22 @@ def analyze_structure(struct, is_saturation: bool = False) -> dict:
             caps_per_cation[el] = counts
         out["saturation"] = {"cap_distances": cap_distances, "caps_per_cation": caps_per_cation}
 
+        # Surface cap-group areal concentration (groups/nm²), normalised by the true VdW surface
+        # area (rough tops make count/(Lx·Ly) meaningless). Gated + parameterised by surface_opts;
+        # non-fatal so a degenerate slab / missing dependency never aborts the rest of the metrics.
+        opts = surface_opts or {}
+        if opts.get("enabled", True):
+            try:
+                from .surface import cap_areal_density
+                cap_counts = {label: len(v) for label, v in cap_distances.items()}
+                out["cap_areal_density"] = cap_areal_density(
+                    struct, cap_counts, sum(cap_counts.values()),
+                    probe=float(opts.get("probe", 0.0)),
+                    n_points=int(opts.get("n_points", 200)),
+                    overrides=opts.get("overrides") or None)
+            except Exception as exc:   # keep the rest of the metrics dict intact
+                out["cap_areal_density"] = {"error": f"{type(exc).__name__}: {exc}"}
+
     return out
 
 
@@ -146,8 +166,16 @@ def merge_metrics(metrics_list: list) -> dict:
     metrics_list = [m for m in metrics_list if m]
     merged: dict = {"n_atoms": 0, "n_fixed": 0, "n_structures": len(metrics_list),
                     "composition": {}, "coordination": {}, "homo_distance": {},
-                    "element_anion_distance": {}, "tau4": {}, "saturation": None}
+                    "element_anion_distance": {}, "tau4": {}, "saturation": None,
+                    "cap_areal_density": None}
     sat_d, sat_c = {}, {}
+    # Pooled areal density is the ratio of TOTALS (Σcaps / Σarea), not the mean of per-structure
+    # densities: averaging ratios weights a small slab like a large one and is biased. Accumulate
+    # counts and area, divide once at the end.
+    dens_counts: dict = {}
+    dens_area = 0.0
+    dens_ncaps = 0
+    dens_nstruct = 0
     for m in metrics_list:
         merged["n_atoms"] += m["n_atoms"]
         merged["n_fixed"] += m["n_fixed"]
@@ -174,8 +202,21 @@ def merge_metrics(metrics_list: list) -> dict:
                 sat_d.setdefault(label, []).extend(v)
             for el, v in m["saturation"].get("caps_per_cation", {}).items():
                 sat_c.setdefault(el, []).extend(v)
+        cad = m.get("cap_areal_density")
+        if cad and "error" not in cad:
+            dens_nstruct += 1
+            dens_area += cad.get("area_nm2", 0.0)
+            dens_ncaps += cad.get("n_caps", 0)
+            for label, c in cad.get("counts", {}).items():
+                dens_counts[label] = dens_counts.get(label, 0) + c
     if sat_d or sat_c:
         merged["saturation"] = {"cap_distances": sat_d, "caps_per_cation": sat_c}
+    if dens_nstruct and dens_area > 0:
+        merged["cap_areal_density"] = {
+            "per_type": {label: c / dens_area for label, c in dens_counts.items()},
+            "total": dens_ncaps / dens_area,
+            "area_nm2": dens_area, "counts": dens_counts, "n_caps": dens_ncaps,
+            "n_structures": dens_nstruct}
     return merged
 
 
@@ -205,4 +246,8 @@ def summarize(metrics: dict) -> dict:
                              for label, v in sat.get("cap_distances", {}).items()}
         s["caps_per_cation_mean"] = {el: (float(np.mean(v)) if v else None)
                                      for el, v in sat.get("caps_per_cation", {}).items()}
+    cad = metrics.get("cap_areal_density")
+    if cad and "error" not in cad:
+        s["cap_areal_density"] = {"total": cad["total"], "per_type": cad["per_type"],
+                                  "area_nm2": cad["area_nm2"], "n_caps": cad["n_caps"]}
     return s

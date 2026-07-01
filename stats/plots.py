@@ -144,3 +144,27 @@ def plot_caps_per_cation(metrics: dict, path: Path):
     ax.set_ylabel("count")
     ax.set_title("Capping groups per cation")
     _save(fig, path)
+
+
+def plot_cap_areal_density(metrics: dict, path: Path):
+    fig, ax = plt.subplots(figsize=(7, 4))
+    cad = metrics.get("cap_areal_density") or {}
+    per = cad.get("per_type") or {}
+    if "error" in cad or not per:
+        _empty(ax)
+    else:
+        labels = sorted(per)
+        heights = [per[label] for label in labels] + [cad.get("total", sum(per.values()))]
+        # colour each cap-type bar by its cap element (O-H -> H, Si-F -> F); total in grey.
+        colors = [_color(label.split("-")[-1]) for label in labels] + ["tab:gray"]
+        xs = labels + ["total"]
+        ax.bar(range(len(xs)), heights, color=colors)
+        ax.set_xticks(range(len(xs)))
+        ax.set_xticklabels(xs, rotation=30, ha="right")
+        area = cad.get("area_nm2")
+        if area:
+            ax.text(0.97, 0.95, f"VdW area {area:.1f} nm²", transform=ax.transAxes,
+                    ha="right", va="top", fontsize=style.ANNOTATION, color="gray")
+    ax.set_ylabel("areal concentration (groups / nm²)")
+    ax.set_title("Surface cap-group areal concentration")
+    _save(fig, path)

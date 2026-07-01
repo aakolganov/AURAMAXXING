@@ -15,6 +15,7 @@ _FIGURES = [
     ("tau4.png", plots.plot_tau4, False),
     ("cap_distance.png", plots.plot_cap_distance, True),
     ("caps_per_cation.png", plots.plot_caps_per_cation, True),
+    ("cap_areal_density.png", plots.plot_cap_areal_density, True),
 ]
 
 
