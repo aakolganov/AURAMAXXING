@@ -570,6 +570,37 @@ class RunSpec:
                    output_format=fmt)
 
 
+@dataclass
+class DFTSpec:
+    """Optional pipeline step 3: write VASP/CP2K geometry-optimization inputs for each
+    generated structure. The ``vasp``/``cp2k`` blocks are free-form passthrough so a user
+    can override our default tags or add their own (see ``dft.common.deep_merge``)."""
+    enabled: bool = False
+    packages: list = field(default_factory=lambda: ["vasp", "cp2k"])
+    vasp: dict = field(default_factory=dict)
+    cp2k: dict = field(default_factory=dict)
+    slurm: bool = False   # also emit a ready-to-edit SLURM array submission script per package
+
+    @classmethod
+    def from_dict(cls, d: dict, where: str) -> "DFTSpec":
+        d = _as_dict(d, where)
+        _check_keys(d, {"enabled", "packages", "vasp", "cp2k", "slurm"}, where)
+        packages = d.get("packages", ["vasp", "cp2k"])
+        if not isinstance(packages, list) or not packages:
+            raise ValueError(f"{where}.packages: expected a non-empty list of package names")
+        for p in packages:
+            _check_choice(p, {"vasp", "cp2k"}, f"{where}.packages")
+        vasp = _as_dict(d.get("vasp", {}) or {}, f"{where}.vasp")
+        cp2k = _as_dict(d.get("cp2k", {}) or {}, f"{where}.cp2k")
+        # Validate only the wrapper keys; the tag dicts under them are free-form passthrough
+        # so a user can add arbitrary INCAR/CP2K tags.
+        _check_keys(vasp, {"incar", "kpoints"}, f"{where}.vasp")
+        _check_keys(cp2k, {"project", "basis_set_file", "potential_file", "input"}, f"{where}.cp2k")
+        return cls(enabled=bool(d.get("enabled", False)),
+                   packages=list(packages), vasp=dict(vasp), cp2k=dict(cp2k),
+                   slurm=bool(d.get("slurm", False)))
+
+
 # --- coordination merge -------------------------------------------------------------
 
 def _parse_cut_offs(raw: dict, where: str) -> dict:
@@ -762,6 +793,7 @@ class RunConfig:
     debug: DebugSpec = field(default_factory=DebugSpec)
     rules: list = field(default_factory=list)
     run: RunSpec = field(default_factory=RunSpec)
+    dft: DFTSpec = field(default_factory=DFTSpec)
 
     @classmethod
     def from_dict(cls, d: dict) -> "RunConfig":
@@ -770,7 +802,7 @@ class RunConfig:
             d,
             {"structure", "composition", "limits", "calculators", "coordination",
              "growth", "finalize", "saturation", "charge_correction", "statistics",
-             "debug", "rules", "run"},
+             "debug", "rules", "run", "dft"},
             "config",
             required=("structure", "composition", "limits", "calculators"),
         )
@@ -829,6 +861,7 @@ class RunConfig:
             debug=DebugSpec.from_dict(d.get("debug", {}), "debug"),
             rules=[RuleSpec.from_dict(r, f"rules[{i}]") for i, r in enumerate(rules)],
             run=RunSpec.from_dict(d.get("run", {}), "run"),
+            dft=DFTSpec.from_dict(d.get("dft", {}), "dft"),
         )
 
 

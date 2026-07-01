@@ -1,18 +1,21 @@
-"""Tests for the DFT-refinement input writers (dft/).
+"""Tests for the DFT-refinement input generator (dft/, pipeline step 3).
 
 Pure file-writing: no VASP/CP2K binary and no MLIP calculator are needed. Structures come
-from the seeded ``make_struct`` fixture.
+from the seeded ``make_struct`` fixture; the end-to-end runner test uses the LJ dummy backend.
 """
 from types import SimpleNamespace
 
 import numpy as np
+from ase import Atoms
 from ase.constraints import FixAtoms
-from ase.io import read
+from ase.io import read, write
 
 from dft.api import write_dft_inputs
 from dft.common import deep_merge
 from dft.cp2k import write_cp2k_inputs
 from dft.vasp import write_vasp_inputs
+from runner.config import load_config
+from runner.runner import run_from_config
 
 
 # Symbols span H, O, Al, Si so the ascending-Z ordering (H, O, Al, Si) is exercised.
@@ -149,3 +152,103 @@ def test_write_dft_inputs_writes_selected_packages(make_struct, tmp_path):
     write_dft_inputs(s.atoms, spec, tmp_path / "dft")
     assert (tmp_path / "dft" / "cp2k" / "p.inp").exists()
     assert not (tmp_path / "dft" / "vasp").exists()         # vasp not requested
+
+
+# --- end-to-end through the runner -------------------------------------------------
+
+def _blank_cfg(tmp_path, dft):
+    return load_config({
+        "structure": {"cell": [16.0, 16.0, 30.0]},
+        "composition": {"target_ratios": {"Si": 1, "O": 2}, "target_number_atoms": 45},
+        "limits": {"bottom": {"type": "flat", "z": 10.0},
+                   "top": {"type": "fourier", "z_av": 18.0, "alpha": 1.0}, "fix": "bottom"},
+        "calculators": {"growth": {"type": "lammps"}},
+        "run": {"output_dir": str(tmp_path / "out"), "seeds": [0]},
+        "dft": dft,
+    })
+
+
+def test_run_from_config_writes_dft_inputs(tmp_path, monkeypatch):
+    from tests.dummy_interface import DummyInterface
+    monkeypatch.setattr("runner.runner.build_calculator",
+                        lambda spec: DummyInterface(dump_path=str(tmp_path / "dump")))
+    cfg = _blank_cfg(tmp_path, {"enabled": True, "packages": ["vasp", "cp2k"],
+                                "cp2k": {"project": "test"}})
+    run_from_config(cfg)
+    dft_dir = tmp_path / "out" / "dft"
+    assert (dft_dir / "vasp" / "INCAR").exists()
+    assert (dft_dir / "vasp" / "POSCAR").exists()
+    assert (dft_dir / "cp2k" / "test.inp").exists()
+
+
+# --- standalone CLI ----------------------------------------------------------------
+
+def test_cli_generates_inputs_for_directory(tmp_path):
+    from dft import cli
+    atoms = Atoms("SiO2", positions=[[5, 5, 5], [6.6, 5, 5], [5, 6.6, 5]],
+                  cell=[12.0, 12.0, 12.0], pbc=True)
+    write(str(tmp_path / "structure.vasp"), atoms, format="vasp")
+    rc = cli.main([str(tmp_path)])
+    assert rc == 0
+    assert (tmp_path / "dft" / "vasp" / "INCAR").exists()
+    assert (tmp_path / "dft" / "cp2k" / "amorphous_oxide.inp").exists()
+
+
+# --- SLURM array script ------------------------------------------------------------
+
+def test_write_slurm_scripts(make_struct, tmp_path):
+    from dft.slurm import write_slurm_scripts
+    s = make_struct(_SYMBOLS, _POSITIONS)
+    spec = SimpleNamespace(packages=["vasp", "cp2k"], vasp={}, cp2k={"project": "amorph"})
+    dft_dirs = []
+    for i in range(2):
+        d = tmp_path / f"s{i}" / "dft"
+        write_dft_inputs(s.atoms, spec, d)
+        dft_dirs.append(d)
+
+    written = write_slurm_scripts(tmp_path, dft_dirs, ["vasp", "cp2k"], cp2k_project="amorph")
+    assert {p.name for p in written} == {"submit_dft_vasp.sbatch", "submit_dft_cp2k.sbatch"}
+
+    vasp_sh = (tmp_path / "submit_dft_vasp.sbatch").read_text()
+    assert "#SBATCH --array=0-1" in vasp_sh                  # 2 structures -> tasks 0..1
+    assert "srun vasp_std" in vasp_sh
+    jobs = (tmp_path / "dft_vasp_jobs.txt").read_text().splitlines()
+    assert len(jobs) == 2 and all(j.endswith("/vasp") for j in jobs)
+
+    cp2k_sh = (tmp_path / "submit_dft_cp2k.sbatch").read_text()
+    assert "srun cp2k.psmp -i amorph.inp" in cp2k_sh         # project name wired into the launch
+
+
+def test_write_slurm_scripts_skips_package_with_no_inputs(make_struct, tmp_path):
+    from dft.slurm import write_slurm_scripts
+    s = make_struct(_SYMBOLS, _POSITIONS)
+    d = tmp_path / "s0" / "dft"
+    write_dft_inputs(s.atoms, SimpleNamespace(packages=["vasp"], vasp={}, cp2k={}), d)
+    # ask for both, but only vasp inputs exist on disk -> only the vasp script is written
+    written = write_slurm_scripts(tmp_path, [d], ["vasp", "cp2k"])
+    assert {p.name for p in written} == {"submit_dft_vasp.sbatch"}
+
+
+def test_cli_slurm_flag_writes_array_script(tmp_path):
+    from dft import cli
+    for i in range(2):
+        sub = tmp_path / f"s{i}"
+        sub.mkdir()
+        atoms = Atoms("SiO2", positions=[[5, 5, 5], [6.6, 5, 5], [5, 6.6, 5]],
+                      cell=[12.0, 12.0, 12.0], pbc=True)
+        write(str(sub / "structure.vasp"), atoms, format="vasp")
+    rc = cli.main([str(tmp_path), "--package", "vasp", "--slurm"])
+    assert rc == 0
+    sh = tmp_path / "submit_dft_vasp.sbatch"
+    assert sh.exists() and "#SBATCH --array=0-1" in sh.read_text()
+
+
+def test_run_from_config_emits_slurm_when_enabled(tmp_path, monkeypatch):
+    from tests.dummy_interface import DummyInterface
+    monkeypatch.setattr("runner.runner.build_calculator",
+                        lambda spec: DummyInterface(dump_path=str(tmp_path / "dump")))
+    cfg = _blank_cfg(tmp_path, {"enabled": True, "packages": ["vasp"], "slurm": True})
+    assert cfg.dft.slurm is True                             # config flag parsed
+    run_from_config(cfg)
+    sh = tmp_path / "out" / "submit_dft_vasp.sbatch"
+    assert sh.exists() and "#SBATCH --array=0-0" in sh.read_text()   # single structure

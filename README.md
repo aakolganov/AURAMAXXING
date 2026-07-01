@@ -29,6 +29,9 @@ then chemically terminated. The pipeline stages:
    F or Na — see [Saturation capping modes](#saturation-capping-modes)).
 5. **Rules (optional)** — `rules.PeriodicStructureModifier` applies structural rules such
    as `AvoidMotifSwapRule` (e.g. avoid Al–O–Al) and `MinimumDistanceRule`.
+6. **DFT inputs (optional)** — `dft.write_dft_inputs`: write ready-to-run VASP and/or CP2K
+   geometry-optimization input sets (PBE-D3BJ, fixed cell, spin non-polarised) next to each
+   structure for refinement. See [DFT-refinement inputs](#dft-refinement-inputs-step-3).
 
 The growth region is defined by a flat bottom and a flat or Fourier-roughened top surface.
 
@@ -215,6 +218,19 @@ run:
   roughness: [0.01, 0.1, 1.0]   # optional; overrides limits.top.alpha (requires fourier top)
   output_dir: output
   output_format: vasp       # vasp | xyz
+
+dft:                        # optional step 3: write VASP/CP2K geo-opt inputs per structure
+  enabled: false
+  packages: [vasp, cp2k]    # any subset
+  slurm: false              # also drop a ready-to-edit SLURM array script per package
+  vasp:
+    incar:   {ENCUT: 550, MY_TAG: 1}    # override/add INCAR tags (null drops one)
+    kpoints: {mode: gamma, grid: [1, 1, 1], shift: [0, 0, 0]}
+  cp2k:
+    project: amorphous_oxide
+    basis_set_file: BASIS_MOLOPT
+    potential_file: GTH_POTENTIALS
+    input:   {FORCE_EVAL: {DFT: {MGRID: {CUTOFF: 600}}}}   # deep-merged onto the defaults
 ```
 
 `run.seeds` × `run.roughness` is swept, producing one structure per combination written
@@ -250,6 +266,46 @@ its oxidation and a terminal coordination of 1; F and Cl are curated, others nee
 `oxidation`/`min_cn`/`max_cn` entry in the `coordination` block. Because saturation adds
 H/F/Na, the cap relax needs an **MLIP** saturation calculator (BKS is rejected). See
 `examples/config/sio2_fluorine_cap.yaml`, `sio2_sodium_cap.yaml`, and `sio2_naf_cap.yaml`.
+
+## DFT-refinement inputs (step 3)
+
+The generated structures are heuristic, so the natural next step is a DFT geometry
+optimization. With `dft.enabled` the runner writes a ready-to-run input set next to each
+structure — `output_dir/.../dft/vasp/` and/or `.../dft/cp2k/` — built from the project's
+standard method: **PBE-D3BJ**, **fixed-cell** ionic relaxation, **spin non-polarised**, no
+wavefunction/charge files kept.
+
+- **VASP** (`INCAR`, `KPOINTS`, `POSCAR`): `ENCUT 500`, `ISMEAR 0 / SIGMA 0.05`, `IVDW 12`
+  (D3-BJ), `ISPIN 1`, `ISIF 2`, `LCHARG/LWAVE = .FALSE.`, Γ-only k-points. The `POSCAR`
+  orders species **lightest-to-heaviest** (H, O, Al, Si …) and a `POTCAR.order` note records
+  that order — assemble your `POTCAR` (PBE PAW) to match. `FixAtoms` is written as Selective
+  Dynamics. py4vasp is *not* used here (it only reads VASP output); use it later for analysis.
+- **CP2K** (`<project>.inp`, `coord.xyz`): QUICKSTEP/GPW, GTH-PBE + `DZVP-MOLOPT-SR-GTH`,
+  `CUTOFF 500 / REL_CUTOFF 50` Ry, `EPS_SCF 1.0E-6` Ha, OT/DIIS, D3(BJ); `RUN_TYPE GEO_OPT`
+  with any frozen substrate emitted as `&FIXED_ATOMS`.
+
+Every tag is overridable from YAML: `vasp.incar` / `vasp.kpoints` are merged onto our INCAR/
+KPOINTS defaults, and `cp2k.input` is **deep-merged** onto the CP2K section tree — a `null`
+value drops a tag, a new key adds one, so you can both adjust our settings and add your own.
+
+With `dft.slurm: true` the run also drops a ready-to-edit **SLURM array** script per package
+at the output root (`submit_dft_vasp.sbatch` / `submit_dft_cp2k.sbatch`, with a matching
+`dft_<pkg>_jobs.txt`). The array size and per-task input directory are wired in automatically;
+the `#SBATCH` resources, module loads and the exact binary are left as `# EDIT` placeholders
+(default launch is `srun vasp_std` / `srun cp2k.psmp -i <project>.inp`). Submit with
+`sbatch submit_dft_vasp.sbatch` once you've assembled the POTCARs. (For a sharded sweep the
+script is written by the `--pool-only` reduce step, like the pooled statistics.)
+
+The same generator runs standalone on already-saved structures (no regeneration):
+
+```bash
+auramaxxing-dft output/siral70                      # every structure.vasp under the dir
+auramaxxing-dft structure.vasp --package cp2k       # one file, CP2K only
+auramaxxing-dft output/siral70 --slurm              # also write the submit_dft_*.sbatch array script
+auramaxxing-dft output/siral70 --config examples/config/siral70.yaml   # apply the dft: overrides
+```
+
+(or `from dft import write_dft_inputs` in Python).
 
 ## Running in parallel (HPC)
 

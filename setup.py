@@ -6,7 +6,10 @@ setup(
     packages=['base', 'growth', 'helpers', 'interfaces', 'saturation', 'rules', 'runner', 'stats', 'dft'],
     python_requires='>=3.10',
     install_requires=['numpy', 'scipy', 'networkx', 'ase', 'tqdm', 'pyyaml'],
-    entry_points={'console_scripts': ['auramaxxing = runner.__main__:main']},
+    entry_points={'console_scripts': [
+        'auramaxxing = runner.__main__:main',
+        'auramaxxing-dft = dft.cli:main',
+    ]},
     license='MIT',
     author='Alexander Kolganov',
     author_email='alexandr.a.kolganov@gmail.com',

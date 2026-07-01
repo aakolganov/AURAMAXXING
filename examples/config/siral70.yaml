@@ -26,6 +26,19 @@ calculators:
 saturation:        {enabled: true}
 charge_correction: {enabled: true}
 
+# Step 3 (optional): write DFT-refinement inputs next to each structure.vasp. Built-in
+# defaults are a PBE-D3BJ, fixed-cell geo-opt; override/extend any tag under vasp.incar /
+# vasp.kpoints and cp2k.input (deep-merged; a null value drops a tag). POTCAR is left to
+# you; POSCAR species are ordered lightest-to-heaviest (H O Al Si) so it lines up.
+dft:
+  enabled: true
+  packages: [vasp, cp2k]
+  slurm: true                      # also drop a ready-to-edit submit_dft_<pkg>.sbatch at the run root
+  vasp:
+    incar: {ENCUT: 500}            # example override; add any INCAR tag here
+  cp2k:
+    project: siral70
+
 run:
   seeds: [0, 1]
   roughness: [0.01, 0.1, 1.0]       # overrides limits.top.alpha; one structure per (seed, alpha)
