@@ -29,14 +29,6 @@ def _validate_task(task: str) -> None:
         raise ValueError(f"unknown UMA task {task!r}; choose one of {sorted(FUNCTIONAL)}")
 
 
-def _is_local_checkpoint(model: str) -> bool:
-    """True when ``model`` is a local checkpoint file (loaded via ``load_predict_unit``)
-    rather than a pretrained model name like ``"uma-s-1p2"`` (loaded via
-    ``get_predict_unit``, which fairchem downloads/caches from the Hub). Mirrors how
-    ``MACEInterface`` distinguishes a local file from a foundation-model keyword."""
-    return (os.sep in model) or model.endswith((".pt", ".ckpt", ".pth")) or os.path.exists(model)
-
-
 def _adds_external_dispersion(task: str, use_dispersion: bool) -> bool:
     """Whether to attach an external D3 term: only when dispersion is requested AND the task's
     training data does not already include it (otherwise the D3 would double-count)."""
@@ -65,7 +57,7 @@ class UMAInterface(CalculatorInterface):
         except ModuleNotFoundError as exc:
             raise ImportError("Please install fairchem-core to use UMAInterface") from exc
 
-        if _is_local_checkpoint(uma_model_path):
+        if self._is_local_path(uma_model_path):
             # Local checkpoint: load directly; atom_refs is optional and only read if given.
             atom_refs = None
             if uma_atom_ref is not None:
@@ -91,11 +83,11 @@ class UMAInterface(CalculatorInterface):
                 from torch_dftd.torch_dftd3_calculator import TorchDFTD3Calculator
             except ModuleNotFoundError as exc:
                 raise ImportError("Please install torch-dftd to use use_dispersion=True") from exc
-            match_dtype = {"float32": torch.float32, "float64": torch.float64}
+
             d3_calc = TorchDFTD3Calculator(
                 device=device,
                 damping=kwargs.pop("damping", "bj"),
-                dtype=match_dtype[kwargs.pop("dtype", "float32")],
+                dtype=self._resolve_dtype(device, kwargs.pop("dtype", None)),
                 xc=FUNCTIONAL[task],
                 cutoff=40 * units.Bohr,
             )
