@@ -265,10 +265,13 @@ def _run_entry(cfg: RunConfig, entry: dict, growth_calc, sat_calc) -> dict:
         if cfg.statistics.enabled:
             # Per structure: plots+stats.json (gated by per_structure) and a small
             # metrics.json (gated by pooled) that the disk-scan pooler gathers.
+            surf = cfg.statistics.surface
             _write_stats(struct, out_path.parent, cfg.saturation.enabled,
                          label=out_path.parent.name,
                          write_files=cfg.statistics.per_structure,
-                         write_metrics_file=cfg.statistics.pooled)
+                         write_metrics_file=cfg.statistics.pooled,
+                         surface_opts={"enabled": surf.enabled, "probe": surf.probe,
+                                       "n_points": surf.n_points, "overrides": surf.vdw_overrides})
     except Exception as exc:   # keep the sweep going; report what was skipped
         record["status"] = "failed"
         record["error"] = f"{type(exc).__name__}: {exc}"
@@ -414,16 +417,18 @@ def _merge_manifests(out_root: Path) -> Optional[Path]:
 
 
 def _write_stats(struct, out_dir, is_saturation: bool, label: str,
-                 write_files: bool = True, write_metrics_file: bool = True):
+                 write_files: bool = True, write_metrics_file: bool = True,
+                 surface_opts: Optional[dict] = None):
     """Write per-structure statistics next to the structure. ``write_files`` controls the
     plots + stats.json; ``write_metrics_file`` controls the lightweight metrics.json that
-    the disk-scan pooler later gathers. Analyses the structure once and reuses it for
-    both. Never aborts the run on a stats failure."""
+    the disk-scan pooler later gathers. ``surface_opts`` parameterises the cap areal-density
+    metric. Analyses the structure once and reuses it for both. Never aborts the run on a
+    stats failure."""
     if not (write_files or write_metrics_file):
         return None
     try:
         from stats import analyze_structure, write_metrics, write_report
-        metrics = analyze_structure(struct, is_saturation=is_saturation)
+        metrics = analyze_structure(struct, is_saturation=is_saturation, surface_opts=surface_opts)
         if write_metrics_file:
             write_metrics(out_dir, metrics, is_saturation=is_saturation, label=label)
         if write_files:

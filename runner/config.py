@@ -502,18 +502,42 @@ class ChargeCorrectionSpec:
 
 
 @dataclass
+class SurfaceSpec:
+    """Surface cap-group areal-concentration metric: caps per nm², normalised by the true
+    van-der-Waals surface area (periodic Shrake–Rupley). ``probe`` 0 = bare VdW surface,
+    ~1.4 Å = solvent-accessible; ``n_points`` is the per-atom sphere sampling (accuracy vs speed);
+    ``vdw_overrides`` is an optional ``{element: radius Å}`` map."""
+    enabled: bool = True
+    probe: float = 0.0
+    n_points: int = 200
+    vdw_overrides: dict = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict, where: str) -> "SurfaceSpec":
+        d = _as_dict(d, where)
+        _check_keys(d, {"enabled", "probe", "n_points", "vdw_overrides"}, where)
+        overrides = _as_dict(d.get("vdw_overrides", {}) or {}, f"{where}.vdw_overrides")
+        return cls(enabled=bool(d.get("enabled", True)),
+                   probe=float(d.get("probe", 0.0)),
+                   n_points=int(d.get("n_points", 200)),
+                   vdw_overrides={str(k): float(v) for k, v in overrides.items()})
+
+
+@dataclass
 class StatisticsSpec:
     enabled: bool = True               # master switch for any statistics output
     per_structure: bool = True         # write per-structure plots + stats.json in each dir
     pooled: bool = True                # write one pooled plot set across the sweep
+    surface: SurfaceSpec = field(default_factory=SurfaceSpec)   # cap areal-density sub-metric
 
     @classmethod
     def from_dict(cls, d: dict, where: str) -> "StatisticsSpec":
         d = _as_dict(d, where)
-        _check_keys(d, {"enabled", "per_structure", "pooled"}, where)
+        _check_keys(d, {"enabled", "per_structure", "pooled", "surface"}, where)
         return cls(enabled=bool(d.get("enabled", True)),
                    per_structure=bool(d.get("per_structure", True)),
-                   pooled=bool(d.get("pooled", True)))
+                   pooled=bool(d.get("pooled", True)),
+                   surface=SurfaceSpec.from_dict(d.get("surface", {}), f"{where}.surface"))
 
 
 @dataclass
