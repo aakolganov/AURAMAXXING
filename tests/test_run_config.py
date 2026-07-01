@@ -135,6 +135,57 @@ def test_composition_adjusts_to_charge_neutral():
     assert _net_charge(cfg.composition.target_counts) == 0
 
 
+def _brute_nearest_neutral(x, ox, K=60):
+    """Reference: exhaustively find the least-squares-closest neutral integer composition."""
+    from itertools import product as _product
+    elems = list(x)
+    n0 = [max(0, round(x[e])) for e in elems]
+    best = None
+    for d in _product(range(-K, K + 1), repeat=len(elems)):
+        n = [n0[i] + d[i] for i in range(len(elems))]
+        if any(c < 0 for c in n) or sum(n) == 0:
+            continue
+        if sum(n[i] * ox[elems[i]] for i in range(len(elems))) != 0:
+            continue
+        cost = sum((n[i] - x[elems[i]]) ** 2 for i in range(len(elems)))
+        if best is None or cost < best[0]:
+            best = (cost, dict(zip(elems, n, strict=True)))
+    return best
+
+
+def test_nearest_neutral_returns_the_closest_composition():
+    # M1: off-stoichiometry Al:O = 2:1 -- the old fixed (4,8,16) ladder stopped at the first
+    # neutral box (Al24/O36, L2 cost 512); the true nearest neutral is Al22/O33 (cost 493).
+    from runner.config import _nearest_neutral_counts
+    x, ox = {"Al": 40.0, "O": 20.0}, {"Al": 3, "O": -2}
+    counts, _, adjusted = _nearest_neutral_counts(dict(x), ox, "test")
+    assert adjusted is True
+    assert sum(n * ox[e] for e, n in counts.items()) == 0            # neutral
+    cost = sum((counts[e] - x[e]) ** 2 for e in x)
+    assert cost == _brute_nearest_neutral(x, ox)[0]                  # provably closest
+    assert counts == {"Al": 22, "O": 33}
+
+
+def test_nearest_neutral_no_false_single_sign_error_for_distant_composition():
+    # M1: a reachable-but-distant composition (both ion signs present) must NOT raise the
+    # "single charge sign" error just because the neutral point needs a large adjustment.
+    from runner.config import _nearest_neutral_counts
+    x, ox = {"Al": 20.0, "O": 80.0}, {"Al": 3, "O": -2}
+    counts, _, _ = _nearest_neutral_counts(dict(x), ox, "test")
+    assert sum(n * ox[e] for e, n in counts.items()) == 0
+    assert sum((counts[e] - x[e]) ** 2 for e in x) == _brute_nearest_neutral(x, ox)[0]
+
+
+def test_nearest_neutral_well_formed_oxides_unchanged():
+    # Regression guard: well-formed oxide ratios still pass through exactly (cost 0, no adjust).
+    from runner.config import _nearest_neutral_counts
+    for x, ox in (({"Si": 144.0, "O": 288.0}, {"Si": 4, "O": -2}),
+                  ({"Al": 80.0, "O": 120.0}, {"Al": 3, "O": -2})):
+        counts, _, adjusted = _nearest_neutral_counts(dict(x), ox, "test")
+        assert adjusted is False
+        assert counts == {e: int(v) for e, v in x.items()}
+
+
 def test_composition_unknown_element_raises():
     with pytest.raises(ValueError, match="Re"):
         _with_composition({"ratio": {"Re": 1, "O": 2}, "total_atoms": 30})
