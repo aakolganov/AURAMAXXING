@@ -12,7 +12,7 @@ from pathlib import Path
 from ase import Atoms
 from ase.io import write as ase_write
 
-from .common import deep_merge, fixed_indices, sort_by_Z
+from .common import deep_merge, fixed_indices, fmt_scalar, sort_by_Z
 
 DEFAULT_CP2K_BASIS = "DZVP-MOLOPT-SR-GTH"
 
@@ -27,13 +27,7 @@ def _potential_for(symbol: str) -> str:
 
 
 def _fmt_cp2k(value) -> str:
-    if isinstance(value, bool):
-        return "TRUE" if value else "FALSE"
-    if isinstance(value, float):
-        return f"{value:g}"
-    if isinstance(value, (list, tuple)):
-        return " ".join(_fmt_cp2k(v) for v in value)
-    return str(value)
+    return fmt_scalar(value, true="TRUE", false="FALSE")   # CP2K booleans: TRUE / FALSE
 
 
 def _render_section(name: str, body: dict, indent: int) -> str:

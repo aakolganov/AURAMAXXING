@@ -6,7 +6,6 @@ Sizes are fixed in points so every figure matches.
 """
 from __future__ import annotations
 
-import textwrap
 from pathlib import Path
 
 import matplotlib
@@ -20,7 +19,6 @@ AXIS_LABEL = 11
 TITLE = 11
 TICK = 10
 LEGEND = 10
-STATBOX = 10
 ANNOTATION = 10        # in-figure value annotations (9-10)
 
 DPI = 300
@@ -41,24 +39,6 @@ def apply_style() -> None:
         "figure.dpi": DPI,
         "savefig.dpi": DPI,
     })
-
-
-def wrap_label(text, width: int = 12) -> str:
-    """Wrap a long axis-tick label onto two lines (no text is dropped; any overflow
-    beyond the first line is kept on the second)."""
-    wrapped = textwrap.wrap(str(text), width=width, break_long_words=False)
-    if not wrapped:
-        return str(text)
-    if len(wrapped) <= 2:
-        return "\n".join(wrapped)
-    return wrapped[0] + "\n" + " ".join(wrapped[1:])
-
-
-def wrap_xticklabels(ax, width: int = 12) -> None:
-    """Wrap any existing string x-tick labels in place."""
-    labels = [t.get_text() for t in ax.get_xticklabels()]
-    if any(labels):
-        ax.set_xticklabels([wrap_label(t, width) for t in labels])
 
 
 def savefig_multi(fig, path, formats=("png",), transparent: bool = True) -> None:

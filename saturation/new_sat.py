@@ -53,6 +53,30 @@ def _try_then_force_place(amorphous_struct, place_atom: str, attach_idx: int, *,
                          num_samples=num_samples, bond_length=bond_length)
 
 
+def _place_neg_cap(amorphous_struct, anchor_idx: int, bond_lengths, num_samples: int,
+                   place_fn) -> None:
+    """Place an -OH cap (net -1) on ``anchor_idx``: the O (tagged NEG_CAP) then its H (OH_H),
+    each via ``place_fn`` -- the collision-aware ``_try_then_force_place`` in basic saturation,
+    or the bystander-aware ``place_atom_terminal`` in charge-correction. The two call sites
+    shared this exact O-then-H sequence, so factoring it keeps the cap-role tagging and the RNG
+    draw order identical."""
+    bl = _cap_bond_length(amorphous_struct, anchor_idx, "O", bond_lengths)
+    place_fn(amorphous_struct, "O", anchor_idx, num_samples=num_samples, bond_length=bl)
+    o_idx = len(amorphous_struct) - 1
+    _set_cap_role(amorphous_struct, o_idx, NEG_CAP)
+    bl = _cap_bond_length(amorphous_struct, o_idx, "H", bond_lengths)
+    place_fn(amorphous_struct, "H", o_idx, num_samples=num_samples, bond_length=bl)
+    _set_cap_role(amorphous_struct, len(amorphous_struct) - 1, OH_H)
+
+
+def _place_pos_cap(amorphous_struct, anchor_idx: int, bond_lengths, num_samples: int,
+                   place_fn) -> None:
+    """Place a standalone H cap (net +1, tagged POS_CAP) on ``anchor_idx`` via ``place_fn``."""
+    bl = _cap_bond_length(amorphous_struct, anchor_idx, "H", bond_lengths)
+    place_fn(amorphous_struct, "H", anchor_idx, num_samples=num_samples, bond_length=bl)
+    _set_cap_role(amorphous_struct, len(amorphous_struct) - 1, POS_CAP)
+
+
 def move_atom(
     amorph_struct: AmorphousStruc,
     idx_move: int,
@@ -233,21 +257,12 @@ def saturate_under_coordinated(
         for attach_idx in idx_list:
             if is_cation:
                 # negative fragment -OH: O on the cation (tagged NEG_CAP), then H on that O.
-                bl = _cap_bond_length(amorphous_struct, attach_idx, "O", bond_lengths)
-                _try_then_force_place(amorphous_struct, "O", attach_idx,
-                                      num_samples=num_samples, bond_length=bl)
-                attach_idx = len(amorphous_struct) - 1   # to account for the 0 index
-                _set_cap_role(amorphous_struct, attach_idx, NEG_CAP)
-                bl = _cap_bond_length(amorphous_struct, attach_idx, "H", bond_lengths)
-                _try_then_force_place(amorphous_struct, "H", attach_idx,
-                                      num_samples=num_samples, bond_length=bl)
-                _set_cap_role(amorphous_struct, len(amorphous_struct) - 1, OH_H)
+                _place_neg_cap(amorphous_struct, attach_idx, bond_lengths, num_samples,
+                               _try_then_force_place)
             else:
                 # positive fragment H on the anion (tagged POS_CAP).
-                bl = _cap_bond_length(amorphous_struct, attach_idx, "H", bond_lengths)
-                _try_then_force_place(amorphous_struct, "H", attach_idx,
-                                      num_samples=num_samples, bond_length=bl)
-                _set_cap_role(amorphous_struct, len(amorphous_struct) - 1, POS_CAP)
+                _place_pos_cap(amorphous_struct, attach_idx, bond_lengths, num_samples,
+                               _try_then_force_place)
 
 
 def _break_and_cap_step(amorphous_struct, current_charge, bond_lengths, num_samples, move_alpha):
@@ -289,19 +304,12 @@ def _break_and_cap_step(amorphous_struct, current_charge, bond_lengths, num_samp
 
     # Cap with a bystander-aware placement: the cap bonds only its intended attach atom where
     # possible, so a forced placement can't over-coordinate unrelated atoms (M2).
-    attach_idx = idx_furthest
     if current_charge > 0:
-        bl = _cap_bond_length(amorphous_struct, attach_idx, "O", bond_lengths)
-        place_atom_terminal(amorphous_struct, "O", attach_idx, bond_length=bl, num_samples=num_samples)
-        attach_idx = len(amorphous_struct) - 1
-        _set_cap_role(amorphous_struct, attach_idx, NEG_CAP)
-        bl = _cap_bond_length(amorphous_struct, attach_idx, "H", bond_lengths)
-        place_atom_terminal(amorphous_struct, "H", attach_idx, bond_length=bl, num_samples=num_samples)
-        _set_cap_role(amorphous_struct, len(amorphous_struct) - 1, OH_H)
+        _place_neg_cap(amorphous_struct, idx_furthest, bond_lengths, num_samples,
+                       place_atom_terminal)
     else:
-        bl = _cap_bond_length(amorphous_struct, attach_idx, "H", bond_lengths)
-        place_atom_terminal(amorphous_struct, "H", attach_idx, bond_length=bl, num_samples=num_samples)
-        _set_cap_role(amorphous_struct, len(amorphous_struct) - 1, POS_CAP)
+        _place_pos_cap(amorphous_struct, idx_furthest, bond_lengths, num_samples,
+                       place_atom_terminal)
     _prune_orphans_from_move(amorphous_struct, cn_before, n_before)
 
     new_charge = amorphous_struct.charge()
@@ -332,17 +340,9 @@ def _add_charge_cap(amorphous_struct, want_negative: bool, bond_lengths, num_sam
     cn = amorphous_struct.get_cn()
     anchor = int(min(cand, key=lambda i: cn[i]))
     if want_negative:
-        bl = _cap_bond_length(amorphous_struct, anchor, "O", bond_lengths)
-        place_atom_terminal(amorphous_struct, "O", anchor, bond_length=bl, num_samples=num_samples)
-        o_idx = len(amorphous_struct) - 1
-        _set_cap_role(amorphous_struct, o_idx, NEG_CAP)
-        bl = _cap_bond_length(amorphous_struct, o_idx, "H", bond_lengths)
-        place_atom_terminal(amorphous_struct, "H", o_idx, bond_length=bl, num_samples=num_samples)
-        _set_cap_role(amorphous_struct, len(amorphous_struct) - 1, OH_H)
+        _place_neg_cap(amorphous_struct, anchor, bond_lengths, num_samples, place_atom_terminal)
     else:
-        bl = _cap_bond_length(amorphous_struct, anchor, "H", bond_lengths)
-        place_atom_terminal(amorphous_struct, "H", anchor, bond_length=bl, num_samples=num_samples)
-        _set_cap_role(amorphous_struct, len(amorphous_struct) - 1, POS_CAP)
+        _place_pos_cap(amorphous_struct, anchor, bond_lengths, num_samples, place_atom_terminal)
     return True
 
 
