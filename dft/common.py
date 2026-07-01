@@ -13,6 +13,20 @@ import numpy as np
 from ase import Atoms
 
 
+def fmt_scalar(value, *, true: str = ".TRUE.", false: str = ".FALSE.") -> str:
+    """Format a value for an input-file line: bools as the ``true``/``false`` tokens, floats via
+    ``%g``, lists/tuples space-joined (recursively), everything else via ``str``. The only
+    backend difference is the boolean token -- VASP wants ``.TRUE.``/``.FALSE.`` (the defaults),
+    CP2K wants ``TRUE``/``FALSE``."""
+    if isinstance(value, bool):
+        return true if value else false
+    if isinstance(value, float):
+        return f"{value:g}"
+    if isinstance(value, (list, tuple)):
+        return " ".join(fmt_scalar(v, true=true, false=false) for v in value)
+    return str(value)
+
+
 def deep_merge(base: dict, override: dict | None) -> dict:
     """Return ``base`` with ``override`` applied recursively (``base`` is not mutated).
 
@@ -51,8 +65,3 @@ def sort_by_Z(atoms: Atoms) -> Atoms:
     POTCAR must follow."""
     order = np.argsort(atoms.numbers, kind="stable")
     return atoms[order]
-
-
-def element_order(atoms: Atoms) -> list[str]:
-    """Distinct element symbols in ascending-Z order (POSCAR/POTCAR block order)."""
-    return list(dict.fromkeys(sort_by_Z(atoms).get_chemical_symbols()))

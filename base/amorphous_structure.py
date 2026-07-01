@@ -298,7 +298,7 @@ class AmorphousStruc:
     def _rebuild_graph(self) -> None:
         """Create a new NetworkX graph using ASE's spatial neighbor list."""
         self._need_graph_update = False
-        cutoffs = self._cutoff_list()
+        cutoffs = self.cut_offs
 
         # 1. Use ASE to efficiently find all interacting pairs
         # 'ij' returns two arrays: indices of the first atom, and indices of the second
@@ -318,11 +318,6 @@ class AmorphousStruc:
         G.remove_edges_from(nx.selfloop_edges(G))
 
         self._graph = G
-
-
-    def _cutoff_list(self) -> dict:
-        """Return the element-pair cutoff dictionary."""
-        return self.cut_offs
 
 
     def charge(self, defined_charges: Optional[dict[str, int]] = None) -> int:

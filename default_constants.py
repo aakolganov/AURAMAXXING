@@ -74,15 +74,6 @@ default_masses = {
     "Al": 27.0,
     "H": 1.008
 }
-# Only the Legacy LAMMPS interface (Legacy/LAMMPS_Interface.py) reads these. The active
-# interfaces.LAMMPS_Interface uses bks_charges, and AmorphousStruc.charge() uses
-# OXIDATION_POS/NEG -- so this table is not live config; kept in sync with bks_charges.
-default_charges = {
-    "Si": 2.4,
-    "O": -1.2,
-    "Al": 1.8,  # matches bks_charges; keeps Al2O3 charge-neutral (2*1.8 - 3*1.2 = 0)
-    "H": 1.2
-}
 
 bks_params = {
     # buck/coul/long: (A_ij, eV; b_ij, A^-1, c_ij, eV*A^6)
@@ -108,14 +99,6 @@ bks_charges = {
     "O" : -1.2,
     "Al":  1.8,
 }
-
-# bond lenghst for satuarion routine
-O_H_BONDLENGTH = 0.98
-El_O_BONDLENGTH = 1.63 #bond lenght for Si/Al - O bond
-
-# If the over-coordinated atoms formally gets assigned a positive charge then it is true
-OVER_POS = {"Si": False, "O": True, "H": False, "Al": False}
-
 
 # Coordination-number distribution (cn_distr): per element, the expected coordination
 # number(s) and their fractions. {} means "use the curated per-element default CN" for every

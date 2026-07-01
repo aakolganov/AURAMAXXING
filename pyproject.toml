@@ -15,7 +15,7 @@ markers = [
 [tool.ruff]
 target-version = "py310"
 line-length = 100
-extend-exclude = ["Legacy", "examples"]
+extend-exclude = ["examples"]
 
 [tool.ruff.lint]
 # Focus on real problems (undefined names, unused imports, mutable defaults, bad

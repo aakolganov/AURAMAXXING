@@ -12,7 +12,7 @@ from pathlib import Path
 from ase import Atoms
 from ase.io import write as ase_write
 
-from .common import deep_merge, sort_by_Z
+from .common import deep_merge, fmt_scalar, sort_by_Z
 
 # Project-standard PBE-D3BJ geo-opt INCAR. Override any tag (or add new ones) under config
 # ``dft.vasp.incar``; set a tag to ``null`` to drop it.
@@ -45,13 +45,7 @@ DEFAULT_VASP_KPOINTS: dict = {"mode": "gamma", "grid": [1, 1, 1], "shift": [0, 0
 
 
 def _fmt(value) -> str:
-    if isinstance(value, bool):
-        return ".TRUE." if value else ".FALSE."
-    if isinstance(value, float):
-        return f"{value:g}"
-    if isinstance(value, (list, tuple)):
-        return " ".join(_fmt(v) for v in value)
-    return str(value)
+    return fmt_scalar(value)   # VASP booleans: .TRUE. / .FALSE.
 
 
 def render_incar(tags: dict) -> str:

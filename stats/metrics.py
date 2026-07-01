@@ -109,7 +109,7 @@ def analyze_structure(struct, is_saturation: bool = False) -> dict:
     # 5) saturation-only: cap-bond distances + capping groups per cation. Generalised from the
     # old O-H / -OH metric so any 1-valent cap (H, F, Na, ...) is reported, not just hydroxyl.
     if is_saturation:
-        degrees = dict(graph.degree())
+        # ``degrees`` was already materialised above (coordination pass); reuse it.
         # A cap is a mobile, monovalent (max_cn 1) terminal atom -- H, F, Na, ...; record its
         # bond to its single anchor, labelled "{anchor}-{cap}".
         cap_distances: dict = {}
