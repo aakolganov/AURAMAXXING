@@ -203,6 +203,10 @@ saturation:        {enabled: false, num_samples: 250}
 charge_correction: {enabled: false, max_iterations: 1000, num_samples: 250, move_alpha: 0.5}
 
 statistics:        {enabled: true, per_structure: true, pooled: true}   # analysis plots + stats.json
+# statistics.surface (saturation runs): surface cap-group areal concentration (groups/nm²),
+# normalised by the true VdW surface area. Defaults {enabled: true, probe: 0.0, n_points: 200,
+# vdw_overrides: {}}. probe 0 = bare VdW surface, ~1.4 = solvent-accessible; n_points = Shrake–Rupley
+# sampling per atom (accuracy vs speed); vdw_overrides = {element: radius Å}.
 
 debug:             {write_growth_dumps: false, write_trajectories: false} # optional; off by default
 # write_growth_dumps: per-atom xyz snapshot after every placement (many files, heavy I/O)
@@ -365,6 +369,11 @@ a `stats.json` next to each structure, and a pooled set across the sweep in `out
   0 = square planar).
 - **cap_distance.png**, **caps_per_cation.png** — saturation runs only: cap bond-length
   distributions per cap pair (O–H, Si–F, O–Na, …) and the number of capping groups per cation.
+- **cap_areal_density.png** — saturation runs only: surface cap-group **areal concentration**
+  (groups/nm²) per cap type and total, normalised by the true van-der-Waals surface area of the slab
+  (a periodic Shrake–Rupley surface) rather than the projected box face — so a Fourier-roughened top,
+  whose real area exceeds Lx·Ly, is measured correctly. Tune via the `statistics.surface` block
+  (`probe`, `n_points`, `vdw_overrides`).
 
 For large ensembles, set `statistics.per_structure: false` to skip the per-structure plots
 (which multiply with every structure) while still getting the single pooled set; or
