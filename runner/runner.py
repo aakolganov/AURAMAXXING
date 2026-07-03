@@ -52,7 +52,10 @@ def build_calculator(spec: CalculatorSpec):
 # --- sweep / plan -------------------------------------------------------------------
 
 def _alpha_label(alpha: Optional[float]) -> str:
-    return f"{alpha:.3f}" if alpha is not None else "flat"
+    # 5 decimals so a dense roughness sweep (e.g. hundreds of log-spaced alphas over
+    # 0.01-1.0, nearest-neighbour gap ~1e-4) keeps a unique directory per combo. The old
+    # 3-decimal label silently collided near the low end (0.0100, 0.0102 -> both "0.010").
+    return f"{alpha:.5f}" if alpha is not None else "flat"
 
 
 def _top_alpha_for(cfg: RunConfig, roughness: Optional[float]) -> Optional[float]:
@@ -86,6 +89,20 @@ def resolve_plan(cfg: RunConfig) -> list[dict]:
         else:
             out_path = out_root / f"seed{seed}_alpha{_alpha_label(alpha)}" / f"structure.{ext}"
         plan.append({"seed": seed, "alpha": alpha, "output_path": out_path})
+
+    # A combo's directory is seed{seed}_alpha{label}; if two combos round to the same
+    # label they would silently overwrite each other's structure. Fail loudly instead.
+    seen: dict = {}
+    for e in plan:
+        key = e["output_path"]
+        if key in seen:
+            s0, a0 = seen[key]
+            raise ValueError(
+                f"run: sweep combos (seed={s0}, alpha={a0}) and (seed={e['seed']}, "
+                f"alpha={e['alpha']}) map to the same output path {key} -- their directory "
+                f"labels collide. Use roughness values that stay distinct to 5 decimals."
+            )
+        seen[key] = (e["seed"], e["alpha"])
     return plan
 
 

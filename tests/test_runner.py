@@ -54,6 +54,25 @@ def test_roughness_without_fourier_top_raises(tmp_path):
         resolve_plan(cfg)
 
 
+def test_resolve_plan_dense_roughness_keeps_unique_dirs(tmp_path):
+    # A dense log-spaced roughness sweep must give one directory per combo. With the old
+    # 3-decimal alpha label, values near 0.01 collided (0.0100, 0.0102 -> both "0.010")
+    # and silently overwrote each other.
+    alphas = [float(a) for a in np.logspace(-2, 0, 300)]
+    cfg = _blank_cfg(tmp_path, seeds=[0], roughness=alphas)
+    plan = resolve_plan(cfg)
+    assert len(plan) == 300
+    assert len({p["output_path"] for p in plan}) == 300   # no collisions
+
+
+def test_resolve_plan_colliding_alphas_raise(tmp_path):
+    # Two alphas closer than the label precision map to the same dir -> raise loudly
+    # rather than silently overwrite one structure with the other.
+    cfg = _blank_cfg(tmp_path, seeds=[0], roughness=[0.01, 0.0100001])
+    with pytest.raises(ValueError, match="same output path"):
+        resolve_plan(cfg)
+
+
 # --- calculator factory (no backend instantiation in the fast tier) ----------------
 
 def test_build_calculator_requires_model_path():
