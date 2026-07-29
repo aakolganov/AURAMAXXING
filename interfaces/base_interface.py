@@ -43,6 +43,13 @@ class CalculatorInterface(ABC):
     """Base class for calculator interfaces with standard MD/Opt methods."""
     dump_path: Path
     calc: Calculator
+    
+
+    def set_dump_path(self, new_dump_path):
+        self.dump_path = Path(new_dump_path)
+        if not self.dump_path.exists():
+            os.makedirs(new_dump_path, exist_ok=True)
+    
 
     def _attach_trajectory(self, run, atoms: Atoms,
                            filename: str, fmt: str = "xyz",
@@ -66,7 +73,7 @@ class CalculatorInterface(ABC):
         def write_frame():
             write(filepath, atoms, append=True, format=fmt)
         run.attach(write_frame, interval=interval)
-
+        
     @staticmethod
     def _resolve_dtype(device: str, explicit_dtype):
         """Default precision: float64 on CPU/CUDA (more accurate, recommended for
@@ -84,7 +91,12 @@ class CalculatorInterface(ABC):
         if model.startswith(("http://", "https://")):
             return False
         return (os.sep in model) or model.endswith((".model", ".pt", ".pth"))
+
     
+    def add_calc(self, other_calc: Calculator):
+        from ase.calculators.mixing import SumCalculator
+        self.calc = SumCalculator([self.calc, other_calc])
+
 
     def optimize(self, atoms: Atoms, fmax: float = 2.0, max_steps: int = 50,
                  logfile: str = "log.log", traj_name: str | None = None, traj_fmt: str | None = None,
