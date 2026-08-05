@@ -32,21 +32,44 @@ _EXT = {"vasp": "vasp", "xyz": "xyz"}
 def build_calculator(spec: CalculatorSpec):
     """Instantiate a calculator backend from its spec. Backends are imported lazily so
     that loading/validating a config never requires LAMMPS, torch or MACE."""
-    opts = dict(spec.options)
+    opts = {k: v for k, v in spec.options.items() if k not in {"type", "addons"}}
     if spec.type == "lammps":
-        from interfaces.LAMMPS_Interface import LMPInterface
+        from auramaxxing.interfaces.LAMMPS_Interface import LMPInterface
         return LMPInterface(**opts)
     if spec.type == "mace":
         if "mace_model_path" not in opts:
             raise ValueError("calculators: a 'mace' calculator needs 'mace_model_path'")
-        from interfaces.MACE_interface import MACEInterface
+        from auramaxxing.interfaces.MACE_interface import MACEInterface
         return MACEInterface(**opts)
     if spec.type == "uma":
         if "uma_model_path" not in opts:
             raise ValueError("calculators: a 'uma' calculator needs 'uma_model_path'")
-        from interfaces.UMA_interface import UMAInterface
+        from auramaxxing.interfaces.UMA_interface import UMAInterface
         return UMAInterface(**opts)
     raise ValueError(f"calculators: unknown calculator type {spec.type!r}")
+
+
+def _build_addon(calc_type: str, opts: dict):
+    """Instantiate a bare ASE Calculator from auramaxxing.calculators."""
+    import importlib
+    mod = importlib.import_module("auramaxxing.calculators")
+    cls = getattr(mod, calc_type)
+    return cls(**opts)
+
+
+def _compose_addons(interface, addons: list) -> None:
+    """Build each addon calculator and compose it onto *interface* via add_calc.
+
+    Addons are bare ASE Calculator objects from auramaxxing.calculators, not
+    full interfaces. Each is instantiated directly from its type string and
+    kwargs, then summed into the interface's internal calculator.
+    """
+    for addon_spec_dict in addons:
+        addon_type = addon_spec_dict.get("type")
+        if addon_type is None:
+            raise ValueError("addon calculator spec missing required type")
+        addon = _build_addon(addon_type, {k: v for k, v in addon_spec_dict.items() if k != "type"})
+        interface.add_calc(addon)
 
 
 # --- sweep / plan -------------------------------------------------------------------
@@ -202,6 +225,12 @@ def _generate_one(cfg: RunConfig, seed: int, roughness: Optional[float],
     )
     _finalize(growth_calc)
 
+    # Dump pre-saturation structure if requested
+    if dbg.pre_saturation_dump:
+        pre_sat_path = out_path.parent / f"pre_sat_structure.{_EXT[cfg.run.output_format]}"
+        struct.atoms.write(str(pre_sat_path), format=cfg.run.output_format)
+        print(f"[runner] wrote pre-saturation structure to {pre_sat_path}")
+
     if cfg.saturation.enabled:
         sat = cfg.saturation
         saturate_under_coordinated(struct, num_samples=sat.num_samples)
@@ -232,7 +261,7 @@ def _generate_one(cfg: RunConfig, seed: int, roughness: Optional[float],
     # Step 3 (optional): write VASP/CP2K DFT-refinement inputs next to the structure. The
     # writer Z-sorts a copy internally, so it is independent of the output above.
     if cfg.dft.enabled:
-        from dft.api import write_dft_inputs
+        from auramaxxing.dft.api import write_dft_inputs
         write_dft_inputs(struct.atoms, cfg.dft, out_path.parent / "dft")
     return struct
 
@@ -298,11 +327,22 @@ def _run_entry(cfg: RunConfig, entry: dict, growth_calc, sat_calc) -> dict:
 
 
 def _default_calc_provider(cfg: RunConfig):
-    """Build the (growth, saturation) calculators from the config. Calculators (LAMMPS/torch)
-    don't pickle, so this runs inside each worker rather than in the parent."""
+    """Build the (growth, saturation) calculators from the config.
+
+    Each calculator's addons are built and composed via add_calc,
+    so all energies/forces are summed before use.  Calculators
+    (LAMMPS/torch) don't pickle, so this runs inside each worker
+    rather than in the parent.
+    """
     growth = build_calculator(cfg.calculators.growth)
-    sat = build_calculator(cfg.calculators.saturation) if cfg.calculators.saturation else growth
+    _compose_addons(growth, cfg.calculators.growth.addons)
+    if cfg.calculators.saturation is None:
+        return growth, growth
+
+    sat = build_calculator(cfg.calculators.saturation)
+    _compose_addons(sat, cfg.calculators.saturation.addons)
     return growth, sat
+
 
 
 # Per-worker state for the in-node process pool: the calculators are built once per worker
@@ -444,7 +484,7 @@ def _write_stats(struct, out_dir, is_saturation: bool, label: str,
     if not (write_files or write_metrics_file):
         return None
     try:
-        from stats import analyze_structure, write_metrics, write_report
+        from auramaxxing.stats import analyze_structure, write_metrics, write_report
         metrics = analyze_structure(struct, is_saturation=is_saturation, surface_opts=surface_opts)
         if write_metrics_file:
             write_metrics(out_dir, metrics, is_saturation=is_saturation, label=label)
@@ -461,7 +501,7 @@ def _pool_stats(cfg: RunConfig) -> None:
     disk (not an in-memory list) makes pooling correct for parallel runs: structures
     produced by separate workers / SLURM array tasks are all included. Never aborts."""
     try:
-        from stats import pool_reports_from_dir
+        from auramaxxing.stats import pool_reports_from_dir
         merged = pool_reports_from_dir(cfg.run.output_dir, cfg.saturation.enabled)
         if merged is not None:
             print(f"[runner] wrote pooled statistics to {cfg.run.output_dir}")
@@ -477,7 +517,7 @@ def _write_dft_slurm(cfg: RunConfig) -> None:
     DFT input dirs that exist on disk, so it covers exactly what was generated (across all
     shards/workers). Never aborts the run."""
     try:
-        from dft.slurm import write_slurm_scripts
+        from auramaxxing.dft.slurm import write_slurm_scripts
         dft_dirs = [entry["output_path"].parent / "dft" for entry in resolve_plan(cfg)]
         project = cfg.dft.cp2k.get("project", "amorphous_oxide")
         written = write_slurm_scripts(Path(cfg.run.output_dir), dft_dirs,
