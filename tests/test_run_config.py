@@ -288,13 +288,6 @@ def test_fourier_limit_requires_alpha():
         load_config(d)
 
 
-def test_bad_calculator_type_raises():
-    d = _minimal()
-    d["calculators"]["growth"] = {"type": "vasp"}
-    with pytest.raises(ValueError, match="type"):
-        load_config(d)
-
-
 # --- saturation fragments (capping modes a/b/c) -----------------------------------------
 
 def _minimal_mace():

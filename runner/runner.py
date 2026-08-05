@@ -32,7 +32,7 @@ _EXT = {"vasp": "vasp", "xyz": "xyz"}
 def build_calculator(spec: CalculatorSpec):
     """Instantiate a calculator backend from its spec. Backends are imported lazily so
     that loading/validating a config never requires LAMMPS, torch or MACE."""
-    opts = dict(spec.options)
+    opts = {k: v for k, v in spec.options.items() if k not in {"type", "addons"}}
     if spec.type == "lammps":
         from interfaces.LAMMPS_Interface import LMPInterface
         return LMPInterface(**opts)
@@ -47,6 +47,29 @@ def build_calculator(spec: CalculatorSpec):
         from interfaces.UMA_interface import UMAInterface
         return UMAInterface(**opts)
     raise ValueError(f"calculators: unknown calculator type {spec.type!r}")
+
+
+def _build_addon(calc_type: str, opts: dict):
+    """Instantiate a bare ASE Calculator from calculators."""
+    import importlib
+    mod = importlib.import_module("calculators")
+    cls = getattr(mod, calc_type)
+    return cls(**opts)
+
+
+def _compose_addons(interface, addons: list) -> None:
+    """Build each addon calculator and compose it onto *interface* via add_calc.
+
+    Addons are bare ASE Calculator objects from calculators, not
+    full interfaces. Each is instantiated directly from its type string and
+    kwargs, then summed into the interface's internal calculator.
+    """
+    for addon_spec_dict in addons:
+        addon_type = addon_spec_dict.get("type")
+        if addon_type is None:
+            raise ValueError("addon calculator spec missing required type")
+        addon = _build_addon(addon_type, {k: v for k, v in addon_spec_dict.items() if k != "type"})
+        interface.add_calc(addon)
 
 
 # --- sweep / plan -------------------------------------------------------------------
@@ -202,6 +225,12 @@ def _generate_one(cfg: RunConfig, seed: int, roughness: Optional[float],
     )
     _finalize(growth_calc)
 
+    # Dump pre-saturation structure if requested
+    if dbg.pre_saturation_dump:
+        pre_sat_path = out_path.parent / f"pre_sat_structure.{_EXT[cfg.run.output_format]}"
+        struct.atoms.write(str(pre_sat_path), format=cfg.run.output_format)
+        print(f"[runner] wrote pre-saturation structure to {pre_sat_path}")
+
     if cfg.saturation.enabled:
         sat = cfg.saturation
         saturate_under_coordinated(struct, num_samples=sat.num_samples)
@@ -298,11 +327,22 @@ def _run_entry(cfg: RunConfig, entry: dict, growth_calc, sat_calc) -> dict:
 
 
 def _default_calc_provider(cfg: RunConfig):
-    """Build the (growth, saturation) calculators from the config. Calculators (LAMMPS/torch)
-    don't pickle, so this runs inside each worker rather than in the parent."""
+    """Build the (growth, saturation) calculators from the config.
+
+    Each calculator's addons are built and composed via add_calc,
+    so all energies/forces are summed before use.  Calculators
+    (LAMMPS/torch) don't pickle, so this runs inside each worker
+    rather than in the parent.
+    """
     growth = build_calculator(cfg.calculators.growth)
-    sat = build_calculator(cfg.calculators.saturation) if cfg.calculators.saturation else growth
+    _compose_addons(growth, cfg.calculators.growth.addons)
+    if cfg.calculators.saturation is None:
+        return growth, growth
+
+    sat = build_calculator(cfg.calculators.saturation)
+    _compose_addons(sat, cfg.calculators.saturation.addons)
     return growth, sat
+
 
 
 # Per-worker state for the in-node process pool: the calculators are built once per worker

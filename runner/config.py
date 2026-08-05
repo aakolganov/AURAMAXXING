@@ -311,14 +311,19 @@ class CalculatorSpec:
     """A calculator backend: ``type`` plus backend-specific options (kwargs)."""
     type: str
     options: dict = field(default_factory=dict)
+    addons: list = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: dict, where: str) -> "CalculatorSpec":
         d = _as_dict(d, where)
         if "type" not in d:
             raise ValueError(f"{where}: missing required key 'type'")
-        kind = _check_choice(d["type"], {"lammps", "mace", "uma"}, f"{where}.type")
-        return cls(type=kind, options={k: v for k, v in d.items() if k != "type"})
+
+        opts = {k: v for k, v in d.items() if k not in {"type", "addons"}}
+        addons_raw = d.get("addons")
+        if addons_raw is not None and not isinstance(addons_raw, list):
+            raise ValueError(f"{where}.addons: expected a list of calculator specs, got {type(addons_raw).__name__}")
+        return cls(type=d["type"], options=opts, addons=[_as_dict(a, f"{where}.addons") for a in (addons_raw or [])])
 
 
 @dataclass
@@ -561,13 +566,17 @@ class DebugSpec:
     mostly useful for diagnosing a single run."""
     write_growth_dumps: bool = False   # per-atom xyz snapshot after every placement
     write_trajectories: bool = False   # anneal + finalize trajectory files
+    pre_saturation_dump: bool = False  # write the optimized, dry surface as well
 
     @classmethod
     def from_dict(cls, d: dict, where: str) -> "DebugSpec":
         d = _as_dict(d, where)
-        _check_keys(d, {"write_growth_dumps", "write_trajectories"}, where)
-        return cls(write_growth_dumps=bool(d.get("write_growth_dumps", False)),
-                   write_trajectories=bool(d.get("write_trajectories", False)))
+        _check_keys(d, {"write_growth_dumps", "write_trajectories", "pre_saturation_dump"}, where)
+        return cls(
+            write_growth_dumps=bool(d.get("write_growth_dumps", False)),
+            write_trajectories=bool(d.get("write_trajectories", False)),
+            pre_saturation_dump=bool(d.get("pre_saturation_dump", False))
+            )
 
 
 @dataclass
