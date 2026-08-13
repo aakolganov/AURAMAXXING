@@ -152,12 +152,15 @@ def collect_over_or_under_cn_atoms(amorphous_struct: AmorphousStruc, do_under: b
     all_cn = amorphous_struct.get_cn()
 
     symbols = np.array(amorphous_struct.symbols)
-    cn_dict = {at: [] for at in set(symbols)}
+    # sorted(): set iteration order depends on PYTHONHASHSEED, and this dict's order decides the
+    # element capping order downstream — unsorted, the same seed gives different slabs in
+    # different interpreter processes (e.g. spawn workers).
+    cn_dict = {at: [] for at in sorted(set(symbols))}
     # under-coordinated: CN below the (per-element) minimum; over-coordinated: CN above
     # the per-atom maximum (so an Al allowed CN 6 isn't flagged over until CN > 6).
     limits = amorphous_struct.min_cn_array() if do_under else amorphous_struct.max_cn_array()
     flagged = (all_cn < limits) if do_under else (all_cn > limits)
-    for sym in set(symbols):
+    for sym in sorted(set(symbols)):
         mask = (symbols == sym) & flagged
         cn_dict[sym].extend(np.where(mask)[0])
     return cn_dict
@@ -317,7 +320,7 @@ def _break_and_cap_step(amorphous_struct, current_charge, bond_lengths, num_samp
         amorphous_struct,
         idx_move=chosen_idx_pos,
         move_away_from=idx_furthest,
-        dist_move=amorphous_struct.d_min_max[amorphous_struct.atoms[chosen_idx_pos].symbol][amorphous_struct.atoms[idx_furthest].symbol][0]+0.2,
+        dist_move=amorphous_struct.d_min_max[amorphous_struct.atoms[chosen_idx_pos].symbol][amorphous_struct.atoms[idx_furthest].symbol][1]+0.2,
         alpha=move_alpha,
         )
 
@@ -347,14 +350,21 @@ def _add_charge_cap(amorphous_struct, want_negative: bool, bond_lengths, num_sam
     -OH group (net -1) to a cation; otherwise add an H (net +1) to an anion. The lowest-coordinated
     eligible atom is chosen, so an under-coordinated site is preferred (the cap then also improves
     coordination) and a fully-coordinated one is only mildly over-coordinated as a last resort. A
-    positive net charge guarantees a cation exists and a negative one an anion, so this always makes
-    progress; returns ``False`` only if no atom of the needed sign exists at all (then the slab
-    genuinely has a single charge sign)."""
+    positive net charge guarantees a network cation exists and a negative one an anion, so this
+    always makes progress; returns ``False`` only if no network-capable atom of the needed sign
+    exists at all (then the slab genuinely has a single charge sign)."""
     symbols = amorphous_struct.symbols
+    # Monovalent cap atoms (e.g. the H of an -OH/H cap, max CN 1) carry an oxidation sign but must
+    # never anchor a cap: they'd win the lowest-CN tie-break below and the new cap-O would bond an
+    # existing hydrogen, leaving a divalent H bridging two oxygens. Only network-capable atoms
+    # (per-atom max CN > 1) are eligible.
+    max_cn = amorphous_struct.max_cn_array()
     if want_negative:
-        cand = [i for i in range(len(symbols)) if amorphous_struct.oxidation.get(symbols[i], 0) > 0]
+        cand = [i for i in range(len(symbols))
+                if amorphous_struct.oxidation.get(symbols[i], 0) > 0 and max_cn[i] > 1]
     else:
-        cand = [i for i in range(len(symbols)) if amorphous_struct.oxidation.get(symbols[i], 0) < 0]
+        cand = [i for i in range(len(symbols))
+                if amorphous_struct.oxidation.get(symbols[i], 0) < 0 and max_cn[i] > 1]
     if not cand:
         return False
     cn = amorphous_struct.get_cn()

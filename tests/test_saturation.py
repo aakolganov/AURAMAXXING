@@ -339,3 +339,91 @@ def test_derive_bond_length_matches_covalent_radii():
     # symmetric and scaled by bond_factor
     assert derive_bond_length("O", "H") == pytest.approx(derive_bond_length("H", "O"), abs=1e-12)
     assert derive_bond_length("Si", "O", bond_factor=0.5) == pytest.approx(expected * 0.5, abs=1e-9)
+
+
+# --- the break-and-cap "bond break" must actually sever the bond --------------------------
+# _break_and_cap_step moves the defect atom to d_min_max[..][1] + 0.2, past the pair's graph
+# cutoff in both bond-table families (legacy: window max 1.92 vs cutoff 2.0; derived:
+# d_min_max[1] == the cutoff itself). It used to move to [0] + 0.2 -- the collision floor,
+# INSIDE the bonding cutoff -- so the "broken" bond survived every committed step: the charge
+# still reached zero (via the cap), but the original CN defect was never repurposed.
+
+@pytest.mark.parametrize("seed", range(10))
+def test_break_and_cap_resolves_the_over_coordination(make_struct, seed):
+    from saturation.new_sat import correct_charge, collect_over_or_under_cn_atoms
+    # tricluster: an O bonded to three Si (CN 3 > max 2). Only a real bond break can lower an
+    # anion's CN (caps only ever add bonds), so no over-coordinated anion may survive.
+    s = make_struct(["O", "Si", "Si", "Si"],
+                    [[7, 7, 7], [8.6, 7, 7], [5.4, 7, 7], [7, 8.6, 7]],
+                    cell=(16.0, 16.0, 16.0), seed=seed)
+    assert s.get_cn(0) == 3
+    correct_charge(s, max_iterations=200)
+    assert s.charge() == 0
+    over = collect_over_or_under_cn_atoms(s, do_under=False)
+    over_anions = [i for k, v in over.items() if s.oxidation.get(k, 0) < 0 for i in v]
+    assert not over_anions, "over-coordinated O survived: the bond break never broke the bond"
+
+
+# --- the direct-cap fallback must never anchor a cap on a monovalent cap atom -------------
+
+def test_charge_cap_fallback_skips_hydrogen_anchors(make_struct):
+    import numpy as np
+    from saturation.new_sat import _add_charge_cap
+    # Si(OH)4: every atom fully coordinated. The hydrogens (CN 1, oxidation +1) used to win
+    # the lowest-CN tie-break, so the new cap-O bonded an existing hydroxyl H -- a divalent H
+    # bridging two oxygens. Only the network cation (Si) is an eligible anchor.
+    d_si_o, d_o_h = 1.62, 0.96
+    dirs = np.array([[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]]) / np.sqrt(3.0)
+    c = np.array([8.0, 8.0, 8.0])
+    symbols = ["Si"] + ["O"] * 4 + ["H"] * 4
+    positions = ([c] + [c + d * d_si_o for d in dirs]
+                 + [c + d * (d_si_o + d_o_h) for d in dirs])
+    s = make_struct(symbols, positions, cell=(16.0, 16.0, 16.0))
+    assert list(s.get_cn()) == [4, 2, 2, 2, 2, 1, 1, 1, 1]   # fully coordinated
+    assert _add_charge_cap(s, want_negative=True, bond_lengths=None, num_samples=250)
+    cn = s.get_cn()
+    h_idx = [i for i, sym in enumerate(s.symbols) if sym == "H"]
+    assert all(cn[i] <= 1 for i in h_idx), "cap anchored on a hydroxyl H (divalent H motif)"
+    assert cn[0] == 5, "the -OH cap must anchor on the network cation (Si)"
+
+
+# --- seeded saturation must be reproducible across interpreter processes ------------------
+# collect_over_or_under_cn_atoms decides the element capping order (and the break-step
+# candidate order); it used to iterate set(symbols), whose order rides on PYTHONHASHSEED --
+# the same config+seed produced different slabs in different processes (e.g. spawn workers).
+
+def test_saturation_reproducible_across_hash_seeds(tmp_path):
+    import hashlib
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    repo_root = Path(__file__).resolve().parents[1]
+    script = tmp_path / "run_sat_fingerprint.py"
+    script.write_text(
+        "import hashlib\n"
+        "import numpy as np\n"
+        "from base.amorphous_structure import AmorphousStruc_factory\n"
+        "from saturation.new_sat import saturate_under_coordinated, correct_charge\n"
+        "# a Si tricluster defect + an under-coordinated Al2O4 cluster: three element types\n"
+        "# with both under- and over-coordination, so element iteration order matters\n"
+        "s = AmorphousStruc_factory(\n"
+        "    symbols=['O', 'Si', 'Si', 'Si', 'Al', 'Al', 'O', 'O', 'O', 'O'],\n"
+        "    positions=np.array([[7., 7., 7.], [8.6, 7., 7.], [5.4, 7., 7.], [7., 8.6, 7.],\n"
+        "                        [15., 15., 5.], [15., 15., 12.], [16.8, 15., 5.],\n"
+        "                        [13.2, 15., 5.], [16.8, 15., 12.], [13.2, 15., 12.]]),\n"
+        "    cell=[22.0, 22.0, 22.0], pbc=True, seed=7)\n"
+        "saturate_under_coordinated(s, num_samples=50)\n"
+        "correct_charge(s, max_iterations=100, num_samples=50)\n"
+        "fp = hashlib.md5(''.join(s.symbols).encode()\n"
+        "                 + np.round(s.atoms.get_positions(), 8).tobytes()).hexdigest()\n"
+        "print(fp)\n"
+    )
+    fingerprints = set()
+    for hash_seed in ("0", "1", "2"):
+        env = dict(os.environ, PYTHONHASHSEED=hash_seed, PYTHONPATH=str(repo_root))
+        out = subprocess.run([sys.executable, str(script)], env=env, cwd=repo_root,
+                             capture_output=True, text=True, timeout=120)
+        assert out.returncode == 0, out.stderr
+        fingerprints.add(out.stdout.strip())
+    assert len(fingerprints) == 1, f"structure depends on PYTHONHASHSEED: {fingerprints}"
