@@ -1,3 +1,4 @@
+import os
 from typing import Optional
 
 from base.amorphous_structure import AmorphousStruc
@@ -241,6 +242,7 @@ def saturate_under_coordinated(
         bond_lengths=None,
         num_samples: int = 250,
         highlight_file: Optional[str] = None,
+        dump_dir=None,
     ):
     """Basic saturation: cap each under-coordinated cation (positive oxidation) with an -OH
     group and each under-coordinated anion (negative oxidation) with an H, and tag the added
@@ -255,6 +257,17 @@ def saturate_under_coordinated(
         highlight_coordination(amorphous_struct, highlight_file)
     undr_cn = collect_over_or_under_cn_atoms(amorphous_struct, do_under=True)
 
+    # Optional per-cap trajectory dump for animating the saturation stage: one xyz frame
+    # before capping, then one after each -OH/H cap. Uses atoms.write directly (no sort) so
+    # it never perturbs the attach indices collected above.
+    _traj = None
+    if dump_dir is not None:
+        os.makedirs(dump_dir, exist_ok=True)
+        _traj = os.path.join(str(dump_dir), "saturation.xyz")
+        if os.path.exists(_traj):
+            os.remove(_traj)
+        amorphous_struct.atoms.write(_traj, format="xyz", append=True)
+
     for sym, idx_list in undr_cn.items():
         is_cation = amorphous_struct.oxidation.get(sym, 0) > 0
         for attach_idx in idx_list:
@@ -266,6 +279,8 @@ def saturate_under_coordinated(
                 # positive fragment H on the anion (tagged POS_CAP).
                 _place_pos_cap(amorphous_struct, attach_idx, bond_lengths, num_samples,
                                _try_then_force_place)
+            if _traj is not None:
+                amorphous_struct.atoms.write(_traj, format="xyz", append=True)
 
 
 def _break_and_cap_step(amorphous_struct, current_charge, bond_lengths, num_samples, move_alpha):
@@ -382,6 +397,7 @@ def correct_charge(
         max_iterations: int = 1000,
         num_samples: int = 250,
         move_alpha: float = 0.5,
+        dump_dir=None,
     ):
     """Drive the slab to net formal charge zero by adding H / -OH caps. Two strategies per step:
 
@@ -398,6 +414,15 @@ def correct_charge(
        structure is already fully coordinated (e.g. a fixed-CN borate / phosphate that the bond-
        break strategy alone could not neutralise). The post-loop check stays as a safety net.
     """
+    # Optional per-step trajectory dump for animating the charge-correction stage.
+    _traj = None
+    if dump_dir is not None:
+        os.makedirs(dump_dir, exist_ok=True)
+        _traj = os.path.join(str(dump_dir), "charge.xyz")
+        if os.path.exists(_traj):
+            os.remove(_traj)
+        amorphous_struct.atoms.write(_traj, format="xyz", append=True)
+
     current_charge = amorphous_struct.charge()
     iteration = 0
     while current_charge != 0 and iteration < max_iterations:
@@ -406,12 +431,16 @@ def correct_charge(
                                         bond_lengths, num_samples, move_alpha)
         if committed is not None:
             current_charge = committed
+            if _traj is not None:
+                amorphous_struct.atoms.write(_traj, format="xyz", append=True)
             continue
         # No usable bond-break site (or it could not make progress): fall back to a direct cap,
         # which always shifts the charge one unit toward zero while a cation/anion exists.
         if not _add_charge_cap(amorphous_struct, current_charge > 0, bond_lengths, num_samples):
             break
         current_charge = amorphous_struct.charge()
+        if _traj is not None:
+            amorphous_struct.atoms.write(_traj, format="xyz", append=True)
 
     amorphous_struct.sort_atoms()
     final_charge = amorphous_struct.charge()
