@@ -165,3 +165,23 @@ def test_growth_is_deterministic(dummy_calc, tmp_path):
     a, b = run("a"), run("b")
     assert a.symbols == b.symbols
     assert np.allclose(a.atoms.get_positions(), b.atoms.get_positions())
+
+
+# --- growth dumps must be pure observers: dumps-on == dumps-off -------------------
+# write_structure_to_file used to sort_atoms() on the LIVE structure per dump frame,
+# reordering the indices consumed by subsequent rng draws: the same seed grew a
+# DIFFERENT structure with dumps on than with dumps off.
+
+def test_growth_dumps_do_not_change_the_run(dummy_calc, tmp_path):
+    from growth.new_growth import grow_structure
+
+    results = {}
+    for dumps in (False, True):
+        s = _build_growth_struct(seed=3)
+        grow_structure(s, target_number_atoms=25, target_ratios={"Si": 1, "O": 2},
+                       calculator=dummy_calc, output_dir=tmp_path / f"dumps_{dumps}",
+                       write_growth_dumps=dumps)
+        results[dumps] = (list(s.symbols), s.atoms.get_positions().copy())
+
+    assert results[False][0] == results[True][0], "dumps changed the grown composition/order"
+    assert np.allclose(results[False][1], results[True][1]), "dumps changed the grown geometry"
