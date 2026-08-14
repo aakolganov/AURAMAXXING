@@ -185,3 +185,43 @@ def test_growth_dumps_do_not_change_the_run(dummy_calc, tmp_path):
 
     assert results[False][0] == results[True][0], "dumps changed the grown composition/order"
     assert np.allclose(results[False][1], results[True][1]), "dumps changed the grown geometry"
+
+
+# --- deposition mode: bottom-seeded, front-following growth ------------------------
+# growth.mode="deposition" seeds the first atom just above the bottom boundary and
+# weights anchor selection toward the lowest unsaturated sites, so the film densifies
+# bottom-up while the volume above is still open (the bottom face of mid-out growth
+# is left porous 4-5 A deep; deposition is the generator-level fix).
+
+def test_deposition_seeds_at_the_bottom(make_struct):
+    from base.initialize import initialize_structure_blank
+    from base.limits import make_limit_flat, fix_limits
+    from helpers.atom_placing import place_atom_most_z_space
+
+    zs = {}
+    for mode in ("default", "deposition"):
+        s = initialize_structure_blank(cell=[20.0, 20.0, 25.0])
+        s.set_seed(4)
+        make_limit_flat(s, z_val=5.0, is_for="bottom")
+        make_limit_flat(s, z_val=20.0, is_for="top")
+        fix_limits(s.limits, hard_limit="bottom")
+        place_atom_most_z_space(s, "Si", mode=mode)
+        zs[mode] = s.atoms.get_positions()[0, 2]
+    assert zs["deposition"] == pytest.approx(6.0, abs=0.01)     # lower_lim + 1.0
+    assert zs["default"] == pytest.approx(12.5, abs=0.01)       # mid-height
+
+
+def test_deposition_grows_bottom_up(dummy_calc, tmp_path):
+    import numpy as np
+    from growth.new_growth import grow_structure
+
+    s = _build_growth_struct(seed=5)
+    grow_structure(s, target_number_atoms=30, target_ratios={"Si": 1, "O": 2},
+                   calculator=dummy_calc, output_dir=tmp_path / "g", mode="deposition")
+    assert len(s) == 30
+    z = s.atoms.get_positions()[:, 2]
+    # commit order == index order (no dumps): the first third must sit lower than the
+    # last third -- the front advanced upward.
+    assert z[:10].mean() < z[-10:].mean() - 1.0
+    # and everything grew from the bottom region: the earliest atoms hug the wall
+    assert z[:5].mean() < 8.0

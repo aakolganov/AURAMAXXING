@@ -29,6 +29,7 @@ def grow_structure(
         workdir: Optional[Path] = None,
         write_growth_dumps: bool = False,
         write_trajectories: bool = False,
+        mode: str = "default",
     ):
     # ``workdir`` is this slab's own directory; anneal logs/trajectories go there so
     # concurrent runs never collide. ``write_growth_dumps``/``write_trajectories`` gate
@@ -63,7 +64,7 @@ def grow_structure(
 
             atom_to_add = pick_next_atom_type(amorphous_struct, target_ratios)
             if current_number_atoms == 0:
-                place_atom_most_z_space(amorphous_struct, atom_to_add)
+                place_atom_most_z_space(amorphous_struct, atom_to_add, mode=mode)
                 pbar.update(1)
                 continue
             
@@ -74,7 +75,8 @@ def grow_structure(
             all_cn = amorphous_struct.get_cn()
             placement_cache = build_placement_cache(amorphous_struct)
 
-            idx_connect_to = choose_atom_idx_to_attach_to(amorphous_struct, atom_to_add, all_cn=all_cn)
+            idx_connect_to = choose_atom_idx_to_attach_to(amorphous_struct, atom_to_add, all_cn=all_cn,
+                                                             z_mode="front" if mode == "deposition" else "mid")
 
             current_iter = 0
             placement_success = False
@@ -97,7 +99,8 @@ def grow_structure(
                 if not placement_success:
                     excluded_idx.append(idx_connect_to)
                     # If placement fails, pick a different anchor
-                    idx_connect_to = choose_atom_idx_to_attach_to(amorphous_struct, atom_to_add, exclude_indices=excluded_idx, all_cn=all_cn)  # Try different connection point if placement failed
+                    idx_connect_to = choose_atom_idx_to_attach_to(amorphous_struct, atom_to_add, exclude_indices=excluded_idx, all_cn=all_cn,
+                                                                  z_mode="front" if mode == "deposition" else "mid")  # Try different connection point if placement failed
             
             if placement_success:
                 pbar.update(1)

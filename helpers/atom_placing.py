@@ -151,10 +151,15 @@ def place_atom_sphere(
 def place_atom_most_z_space(
         amorphous_struct: AmorphousStruc,
         atom_type: str,
+        mode: str = "default",
     ) -> None:
     """
-    Place the initial atom somewhere within the limits that has a large 
+    Place the initial atom somewhere within the limits that has a large
     amount of local surrounding volume.
+
+    ``mode="deposition"`` seeds at the BOTTOM boundary of the chosen cell instead of
+    mid-height: growth then advances as an upward-sweeping front, so the bottom face
+    densifies first while the space above it is still open.
     """
     limits: Limits = amorphous_struct.limits
     rng = amorphous_struct.rng
@@ -179,7 +184,11 @@ def place_atom_most_z_space(
     # Adding 0.5 places the atom in the exact middle of the X/Y grid cell
     x = (ix + 0.5) * limits.dx
     y = (iy + 0.5) * limits.dy
-    z = limits.lower_lim[ix, iy] + 0.5 * dz[ix, iy]
+    if mode == "deposition":
+        # just above the wall: the first monolayer IS the intended bottom termination
+        z = limits.lower_lim[ix, iy] + 1.0
+    else:
+        z = limits.lower_lim[ix, iy] + 0.5 * dz[ix, iy]
 
     amorphous_struct.commit_atom(atom_type, position=np.array([x, y, z]))
 

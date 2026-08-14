@@ -346,19 +346,23 @@ class GrowthSpec:
     per_anchor_attempts: int = 100
     num_samples: int = 100
     anneal: Optional[dict] = None   # {T_ini, T_fin, steps, interval}; None -> grow defaults
+    mode: str = "default"           # "deposition": bottom-seeded, front-following growth
 
     @classmethod
     def from_dict(cls, d: dict, where: str) -> "GrowthSpec":
         d = _as_dict(d, where)
-        _check_keys(d, {"max_placement_attempts", "per_anchor_attempts", "num_samples", "anneal"}, where)
+        _check_keys(d, {"max_placement_attempts", "per_anchor_attempts", "num_samples", "anneal",
+                        "mode"}, where)
         anneal = d.get("anneal")
         if anneal is not None:
             _check_keys(_as_dict(anneal, f"{where}.anneal"),
                         {"T_ini", "T_fin", "steps", "interval"}, f"{where}.anneal")
+        mode = _check_choice(d.get("mode", "default"), {"default", "deposition"}, f"{where}.mode")
         return cls(max_placement_attempts=int(d.get("max_placement_attempts", 1000)),
                    per_anchor_attempts=int(d.get("per_anchor_attempts", 100)),
                    num_samples=int(d.get("num_samples", 100)),
-                   anneal=anneal)
+                   anneal=anneal,
+                   mode=mode)
 
 
 @dataclass

@@ -3,7 +3,7 @@ from base import AmorphousStruc
 from typing import Optional
 
 
-def choose_atom_idx_to_attach_to(amorphous_struct: AmorphousStruc, atom_type: str, weight_z: bool = True, added_weights: Optional[callable]=None, exclude_indices: Optional[list[int]] = None, all_cn: Optional[np.ndarray] = None) -> int:
+def choose_atom_idx_to_attach_to(amorphous_struct: AmorphousStruc, atom_type: str, weight_z: bool = True, added_weights: Optional[callable]=None, exclude_indices: Optional[list[int]] = None, all_cn: Optional[np.ndarray] = None, z_mode: str = "mid") -> int:
     symbols = np.array(amorphous_struct.symbols)
     # Coordination numbers don't change across retries on the same structure, so a
     # caller in a retry loop can compute them once and pass them in to avoid the
@@ -60,8 +60,18 @@ def choose_atom_idx_to_attach_to(amorphous_struct: AmorphousStruc, atom_type: st
     # if we want to weight also by z-coordinate:
     if weight_z:
         zpos = amorphous_struct.atoms.get_positions()[sub, 2]
-        w = np.exp(-((zpos - zpos.mean()) ** 2))
-        w = np.ones_like(zpos) if np.allclose(w, 0) else w / w.sum()
+        if z_mode == "front":
+            # Deposition mode: prefer the LOWEST eligible anchors so each layer is
+            # completed while the volume above it is still open (the front reference is
+            # the lowest unsaturated candidate of ANY coordination, not just this CN
+            # group, so a nearly-buried incomplete site keeps pulling growth back down).
+            # The 2 A decay length is roughly one bond length of compliance.
+            z_front = amorphous_struct.atoms.get_positions()[cand, 2].min()
+            w = np.exp(-(zpos - z_front) / 2.0)
+            w = np.ones_like(zpos) if np.allclose(w, 0) else w / w.sum()
+        else:
+            w = np.exp(-((zpos - zpos.mean()) ** 2))
+            w = np.ones_like(zpos) if np.allclose(w, 0) else w / w.sum()
     
     if added_weights is not None:
         w = added_weights(amorphous_struct, w, sub)
