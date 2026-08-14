@@ -18,8 +18,7 @@ import numpy as np
 from base.initialize import initialize_structure_blank, initialize_structure_file
 from base.limits import make_limit_flat, make_limits_fourier, fix_limits
 from growth.new_growth import grow_structure, finalize_structure
-from saturation.new_sat import (saturate_under_coordinated, correct_charge, relabel_caps,
-                                stitch_network)
+from saturation.new_sat import saturate_under_coordinated, correct_charge, relabel_caps
 from rules import PeriodicStructureModifier, AvoidMotifSwapRule, MinimumDistanceRule
 
 from .config import (RunConfig, RunSpec, CalculatorSpec, LimitSideSpec, load_config,
@@ -224,9 +223,6 @@ def _generate_one(cfg: RunConfig, seed: int, roughness: Optional[float],
         write_growth_dumps=dbg.write_growth_dumps,
         write_trajectories=dbg.write_trajectories,
     )
-    if g.stitch:
-        n_stitched = stitch_network(struct)
-        print(f"[runner] stitching pass formed {n_stitched} bonds")
     _finalize(growth_calc, traj_name="opt_growth")
 
     # Dump pre-saturation structure if requested
