@@ -427,3 +427,69 @@ def test_saturation_reproducible_across_hash_seeds(tmp_path):
         assert out.returncode == 0, out.stderr
         fingerprints.add(out.stdout.strip())
     assert len(fingerprints) == 1, f"structure depends on PYTHONHASHSEED: {fingerprints}"
+
+
+# --- stitch_network: post-growth geometric network completion -----------------------------
+# Interior dangling anions are pulled onto nearby spare-capacity cations BEFORE the first
+# relax (which otherwise "completes" the network itself by condensing O-O / M-M). Atoms
+# near either growth boundary are surfaces and must be left for saturation to cap.
+
+def _stitch_fixture(make_struct, with_limits=False, dang_z=10.0):
+    import numpy as np
+    from base.limits import make_limit_flat, fix_limits
+    # A network fragment: central Si#0 with three BRIDGING O (each also bonded to an outer
+    # Si, so they are properly 2-coordinated), plus Si#4 carrying one genuinely dangling O#5
+    # placed 2.38 A from Si#0 -- outside the 2.0 A bond cutoff but stitchable (< r_max).
+    d = 1.62
+    syms = ["Si", "O", "Si", "O", "Si", "O", "Si", "O", "Si"]
+    pos = [[10, 10, dang_z],
+           [10 + d, 10, dang_z], [10 + 2 * d, 10, dang_z],
+           [10 - d, 10, dang_z], [10 - 2 * d, 10, dang_z],
+           [10, 10 + d, dang_z], [10, 10 + 2 * d, dang_z],
+           [10, 7.62, dang_z], [10, 6.0, dang_z]]
+    # ^ indices: 0 = central Si (CN 3, spare capacity); 1/3/5 = bridging O; 2/4/6 = outer
+    #   Si (CN 1); 7 = the dangling O (CN 1, bonded only to Si#8); 8 = its Si
+    s = make_struct(syms, pos, cell=(20.0, 20.0, 24.0))
+    if with_limits:
+        make_limit_flat(s, z_val=4.0, is_for="bottom")
+        make_limit_flat(s, z_val=11.0, is_for="top")
+        fix_limits(s.limits)
+    return s
+
+
+def test_stitch_forms_missing_interior_bond(make_struct):
+    from saturation.new_sat import stitch_network
+    s = _stitch_fixture(make_struct)
+    assert s.get_cn(7) == 1 and s.get_cn(0) == 3
+    n = stitch_network(s)
+    assert n == 1
+    g = s.get_graph(force_rebuild=True)
+    assert g.has_edge(7, 0), "dangling O must be stitched onto the spare-capacity Si"
+    assert s.get_cn(7) == 2 and s.get_cn(0) == 4
+    syms = s.symbols
+    for u, v in g.edges:                      # completion must not create homo bonds
+        assert syms[u] != syms[v]
+
+
+def test_stitch_leaves_surface_atoms_for_saturation(make_struct):
+    from saturation.new_sat import stitch_network
+    # same geometry, but the dangling O sits within the surface margin of the top limit
+    s = _stitch_fixture(make_struct, with_limits=True, dang_z=10.0)
+    assert stitch_network(s, surface_margin=2.5) == 0, \
+        "a dangling anion at a growth face is surface chemistry, not a stitch target"
+    # moved into the interior, the same site stitches
+    s2 = _stitch_fixture(make_struct, with_limits=True, dang_z=7.0)
+    assert stitch_network(s2, surface_margin=2.5) == 1
+
+
+def test_stitch_is_deterministic_and_rng_free(make_struct):
+    import numpy as np
+    from saturation.new_sat import stitch_network
+    runs = []
+    for _ in range(2):
+        s = _stitch_fixture(make_struct)
+        state_before = repr(s.rng.bit_generator.state)
+        stitch_network(s)
+        assert repr(s.rng.bit_generator.state) == state_before, "stitching must not draw rng"
+        runs.append(s.atoms.get_positions().copy())
+    assert np.allclose(runs[0], runs[1])
