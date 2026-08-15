@@ -283,6 +283,37 @@ def saturate_under_coordinated(
                 amorphous_struct.atoms.write(_traj, format="xyz", append=True)
 
 
+def _near_growth_face(amorphous_struct, indices, margin: float = 2.5) -> np.ndarray:
+    """True for each of ``indices`` within ``margin`` of the top or bottom growth boundary at
+    its own (x, y) grid cell. Charge-correction caps should terminate the exposed SURFACES:
+    a cap planted on an interior defect is a bulk silanol, which real oxides essentially do
+    not have (stage attribution: the spatially blind charge fallback put 67% of its caps
+    interior, 30% deeper than 4.5 Å). Without installed limits nothing is classified as a
+    face and callers fall back to the unpartitioned behaviour."""
+    lim = amorphous_struct.limits
+    mask = np.zeros(len(indices), dtype=bool)
+    if lim is None or lim.upper_lim is None or lim.lower_lim is None:
+        return mask
+    p = amorphous_struct.atoms.get_positions()[np.asarray(indices, dtype=int)]
+    ix = np.clip((p[:, 0] / lim.dx).astype(int), 0, lim.nx - 1)
+    iy = np.clip((p[:, 1] / lim.dy).astype(int), 0, lim.ny - 1)
+    mask |= p[:, 2] > (lim.upper_lim[ix, iy] - margin)
+    mask |= p[:, 2] < (lim.lower_lim[ix, iy] + margin)
+    return mask
+
+
+def _prefer_surface(amorphous_struct, indices: list) -> list:
+    """Partition candidate sites by the distance-to-face criterion: return only the
+    surface-band members when any exist, else the full list (graceful fallback keeps
+    progress guaranteed -- the partition changes WHERE a cap lands, never whether)."""
+    if not indices:
+        return indices
+    mask = _near_growth_face(amorphous_struct, indices)
+    if mask.any():
+        return [i for i, m in zip(indices, mask) if m]
+    return indices
+
+
 def _break_and_cap_step(amorphous_struct, current_charge, bond_lengths, num_samples, move_alpha):
     """One bond-break + re-cap attempt -- ``correct_charge``'s preferred charge step, which
     repurposes an over/under/variable-CN site so the cap improves coordination rather than over-
@@ -304,6 +335,10 @@ def _break_and_cap_step(amorphous_struct, current_charge, bond_lengths, num_samp
                    if amorphous_struct.oxidation.get(k, 0) > 0 for i in v]
     if not indices:
         indices = find_tetrogonal_sites(amorphous_struct)
+    # surface partition: repurpose surface-band defects first, so the resulting cap
+    # terminates an exposed face instead of decorating the bulk (interior defects are
+    # left for the relax, which heals coordination without adding OH).
+    indices = _prefer_surface(amorphous_struct, indices)
     move = select_idx_for_move(amorphous_struct, indices) if indices else None
     if move is None:
         return None
@@ -382,6 +417,9 @@ def _add_charge_cap(amorphous_struct, want_negative: bool, bond_lengths, num_sam
                 if amorphous_struct.oxidation.get(symbols[i], 0) < 0 and max_cn[i] > 1]
     if not cand:
         return False
+    # surface partition: among eligible anchors, prefer the face band -- a neutralising
+    # cap is surface chemistry; only when no surface candidate exists may it go interior.
+    cand = _prefer_surface(amorphous_struct, cand)
     cn = amorphous_struct.get_cn()
     anchor = int(min(cand, key=lambda i: cn[i]))
     if want_negative:

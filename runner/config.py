@@ -531,12 +531,15 @@ class ChargeCorrectionSpec:
 
 @dataclass
 class SurfaceSpec:
-    """Surface cap-group areal-concentration metric: caps per nm², normalised by the true
-    van-der-Waals surface area (periodic Shrake–Rupley). ``probe`` 0 = bare VdW surface,
-    ~1.4 Å = solvent-accessible; ``n_points`` is the per-atom sphere sampling (accuracy vs speed);
-    ``vdw_overrides`` is an optional ``{element: radius Å}`` map."""
+    """Surface cap-group areal-concentration metric: caps per nm², normalised by the probed
+    surface area (periodic Shrake–Rupley). The default ``probe`` of 1.84 Å is the BET-N₂ gauge,
+    making the density comparable to experimental silanol numbers (Zhuravlev-style); ~1.4 Å is
+    the water-accessible gauge; 0 is the bare VdW surface, which counts every atomic crevice
+    and internal void (~2.5× the accessible area here) and is not comparable to any experiment.
+    ``n_points`` is the per-atom sphere sampling (accuracy vs speed); ``vdw_overrides`` is an
+    optional ``{element: radius Å}`` map."""
     enabled: bool = True
-    probe: float = 0.0
+    probe: float = 1.84
     n_points: int = 200
     vdw_overrides: dict = field(default_factory=dict)
 
@@ -546,7 +549,7 @@ class SurfaceSpec:
         _check_keys(d, {"enabled", "probe", "n_points", "vdw_overrides"}, where)
         overrides = _as_dict(d.get("vdw_overrides", {}) or {}, f"{where}.vdw_overrides")
         return cls(enabled=bool(d.get("enabled", True)),
-                   probe=float(d.get("probe", 0.0)),
+                   probe=float(d.get("probe", 1.84)),
                    n_points=int(d.get("n_points", 200)),
                    vdw_overrides={str(k): float(v) for k, v in overrides.items()})
 

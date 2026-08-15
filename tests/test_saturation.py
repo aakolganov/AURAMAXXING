@@ -427,3 +427,53 @@ def test_saturation_reproducible_across_hash_seeds(tmp_path):
         assert out.returncode == 0, out.stderr
         fingerprints.add(out.stdout.strip())
     assert len(fingerprints) == 1, f"structure depends on PYTHONHASHSEED: {fingerprints}"
+
+
+# --- charge-correction caps must terminate SURFACES, not the bulk -------------------------
+# Stage attribution on production slabs: the spatially blind fallback put 67% of its caps
+# on interior sites (30% deeper than 4.5 A) -- bulk silanol that real oxides do not have.
+# With limits installed, cap-site candidates are partitioned by distance-to-face: surface-
+# band sites win; interior is only used when no surface candidate exists.
+
+def _charged_pair_struct(make_struct, with_limits=True):
+    from base.limits import make_limit_flat, fix_limits
+    # two identical under-coordinated Si (CN 1 each, via one shared... separate O's), one
+    # near the top face (z=17) and one interior (z=11): same CN, so only the surface
+    # partition decides which anchors the neutralising -OH cap.
+    s = make_struct(["Si", "O", "Si", "O"],
+                    [[10, 10, 17.0], [11.62, 10, 17.0], [10, 10, 11.0], [11.62, 10, 11.0]],
+                    cell=(20.0, 20.0, 24.0))
+    if with_limits:
+        make_limit_flat(s, z_val=4.0, is_for="bottom")
+        make_limit_flat(s, z_val=18.0, is_for="top")
+        fix_limits(s.limits)
+    return s
+
+
+def test_charge_cap_prefers_surface_band(make_struct):
+    from saturation.new_sat import _add_charge_cap
+    s = _charged_pair_struct(make_struct)
+    assert _add_charge_cap(s, want_negative=True, bond_lengths=None, num_samples=250)
+    g = s.get_graph(force_rebuild=True)
+    new_o = len(s) - 2                            # -OH cap: O then H appended
+    assert g.has_edge(new_o, 0), "cap must anchor on the SURFACE Si, not the interior one"
+    assert not g.has_edge(new_o, 2)
+
+
+def test_charge_cap_falls_back_to_interior_when_no_surface_candidate(make_struct):
+    from base.limits import make_limit_flat, fix_limits
+    from saturation.new_sat import _add_charge_cap
+    # only an interior candidate exists: the partition must not block progress
+    s = make_struct(["Si", "O"], [[10, 10, 11.0], [11.62, 10, 11.0]], cell=(20.0, 20.0, 24.0))
+    make_limit_flat(s, z_val=4.0, is_for="bottom")
+    make_limit_flat(s, z_val=18.0, is_for="top")
+    fix_limits(s.limits)
+    assert _add_charge_cap(s, want_negative=True, bond_lengths=None, num_samples=250)
+    assert s.get_graph(force_rebuild=True).has_edge(len(s) - 2, 0)
+
+
+def test_charge_cap_without_limits_is_unpartitioned(make_struct):
+    from saturation.new_sat import _add_charge_cap
+    # no limits installed (direct API use): behaviour identical to the old min-CN pick
+    s = _charged_pair_struct(make_struct, with_limits=False)
+    assert _add_charge_cap(s, want_negative=True, bond_lengths=None, num_samples=250)
