@@ -292,13 +292,26 @@ def _near_growth_face(amorphous_struct, indices, margin: float = 2.5) -> np.ndar
     face and callers fall back to the unpartitioned behaviour."""
     lim = amorphous_struct.limits
     mask = np.zeros(len(indices), dtype=bool)
-    if lim is None or lim.upper_lim is None or lim.lower_lim is None:
+    if lim is None or lim.lower_lim is None:
         return mask
-    p = amorphous_struct.atoms.get_positions()[np.asarray(indices, dtype=int)]
+    pos = amorphous_struct.atoms.get_positions()
+    cell = amorphous_struct.atoms.cell.lengths()
+    p = pos[np.asarray(indices, dtype=int)]
+    # bottom: distance to the lower growth limit at the candidate's grid cell (the film
+    # rests on the wall, so the envelope IS the surface there)
     ix = np.clip((p[:, 0] / lim.dx).astype(int), 0, lim.nx - 1)
     iy = np.clip((p[:, 1] / lim.dy).astype(int), 0, lim.ny - 1)
-    mask |= p[:, 2] > (lim.upper_lim[ix, iy] - margin)
     mask |= p[:, 2] < (lim.lower_lim[ix, iy] + margin)
+    # top: distance to the LOCAL ATOMIC surface (max z within a 3 A lateral neighbourhood,
+    # MIC), NOT the growth envelope -- a deposition film underfills its fourier ceiling
+    # (worst at rough alphas), where envelope distance classifies every real-surface site
+    # as interior and silently disables the partition.
+    dxy = pos[None, :, :2] - p[:, None, :2]
+    dxy -= np.round(dxy / cell[:2]) * cell[:2]
+    lat2 = (dxy ** 2).sum(-1)
+    for k in range(len(p)):
+        local_top = pos[lat2[k] < 9.0, 2].max()
+        mask[k] |= p[k, 2] > local_top - margin
     return mask
 
 

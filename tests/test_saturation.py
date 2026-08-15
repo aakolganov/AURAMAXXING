@@ -477,3 +477,24 @@ def test_charge_cap_without_limits_is_unpartitioned(make_struct):
     # no limits installed (direct API use): behaviour identical to the old min-CN pick
     s = _charged_pair_struct(make_struct, with_limits=False)
     assert _add_charge_cap(s, want_negative=True, bond_lengths=None, num_samples=250)
+
+
+def test_charge_cap_surface_criterion_survives_envelope_underfill(make_struct):
+    from base.limits import make_limit_flat, fix_limits
+    from saturation.new_sat import _add_charge_cap, _near_growth_face
+    import numpy as np
+    # A deposition film can sit far below its growth ceiling. The film's real top atom
+    # (z=13) is 9 A under the limit (z=22): an envelope-distance criterion calls it
+    # interior and silently disables the partition; the local-atomic-surface criterion
+    # must still classify it as surface and win over the buried candidate.
+    s = make_struct(["Si", "O", "Si", "O"],
+                    [[10, 10, 13.0], [11.62, 10, 13.0], [10, 10, 9.0], [11.62, 10, 9.0]],
+                    cell=(20.0, 20.0, 26.0))
+    make_limit_flat(s, z_val=6.0, is_for="bottom")
+    make_limit_flat(s, z_val=22.0, is_for="top")
+    fix_limits(s.limits)
+    mask = _near_growth_face(s, [0, 2])          # one entry per passed index
+    assert mask[0] and not mask[1], "local-surface criterion must be fill-independent"
+    assert _add_charge_cap(s, want_negative=True, bond_lengths=None, num_samples=250)
+    g = s.get_graph(force_rebuild=True)
+    assert g.has_edge(len(s) - 2, 0), "cap must land on the film's real surface"
