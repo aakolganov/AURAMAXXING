@@ -225,3 +225,52 @@ def test_deposition_grows_bottom_up(dummy_calc, tmp_path):
     assert z[:10].mean() < z[-10:].mean() - 1.0
     # and everything grew from the bottom region: the earliest atoms hug the wall
     assert z[:5].mean() < 8.0
+
+
+# --- bridge-scoring placement: prefer network-completing (bridging) sites ----------
+# With growth.bridge_bias > 0, place_atom_sphere weights valid candidates by
+# (1+bias)^(useful partners - saturated contacts): an atom is preferentially born
+# BRIDGING two under-coordinated opposite-sign atoms instead of dangling on one.
+# bias=0 preserves the historical uniform pick exactly.
+
+def test_bridge_bias_prefers_bridging_site(make_struct):
+    from helpers.atom_placing import place_atom_sphere
+    # two under-coordinated Si 3.2 A apart: part of the 1.6 A sphere around the anchor
+    # is within the Si-O cutoff (2.0) of the second Si -- a huge bias must pick it.
+    s = make_struct(["Si", "Si"], [[10, 10, 10], [13.2, 10, 10]], cell=(20.0, 20.0, 20.0))
+    assert place_atom_sphere(s, "O", 0, bond_length=1.6, num_samples=200, bridge_bias=1e6)
+    g = s.get_graph(force_rebuild=True)
+    assert g.has_edge(2, 0) and g.has_edge(2, 1), "O must be born bridging both Si"
+
+
+def test_bridge_bias_avoids_saturated_bystander(make_struct):
+    import numpy as np
+    from helpers.atom_placing import place_atom_sphere
+    # the bystander Si#1 is fully coordinated (4 O); with a huge bias the new O placed
+    # on Si#0 must avoid landing inside the saturated Si's cutoff.
+    d = 1.62
+    pos = [[10, 10, 10], [13.2, 10, 10],
+           [13.2 + d, 10, 10], [13.2, 10 + d, 10], [13.2, 10 - d, 10], [13.2, 10, 10 + d]]
+    s = make_struct(["Si", "Si", "O", "O", "O", "O"], pos, cell=(24.0, 24.0, 24.0))
+    assert int(s.get_cn(1)) == 4
+    placed = 0
+    for _ in range(5):
+        if place_atom_sphere(s, "O", 0, bond_length=1.6, num_samples=200, bridge_bias=1e6):
+            new = len(s) - 1
+            g = s.get_graph(force_rebuild=True)
+            assert not g.has_edge(new, 1), "cap-avoiding weight must keep O off the saturated Si"
+            placed += 1
+    assert placed >= 1
+
+
+def test_bridge_bias_zero_is_deterministic_default(make_struct):
+    import numpy as np
+    from helpers.atom_placing import place_atom_sphere
+    from runner.config import GrowthSpec
+    assert GrowthSpec().bridge_bias == 0.0
+    outs = []
+    for _ in range(2):
+        s = make_struct(["Si"], [[10, 10, 10]], cell=(20.0, 20.0, 20.0), seed=11)
+        place_atom_sphere(s, "O", 0, bond_length=1.6, num_samples=100, bridge_bias=0.0)
+        outs.append(s.atoms.get_positions()[-1].copy())
+    assert np.allclose(outs[0], outs[1])

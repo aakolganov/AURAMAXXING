@@ -30,6 +30,7 @@ def grow_structure(
         write_growth_dumps: bool = False,
         write_trajectories: bool = False,
         mode: str = "default",
+        bridge_bias: float = 0.0,
     ):
     # ``workdir`` is this slab's own directory; anneal logs/trajectories go there so
     # concurrent runs never collide. ``write_growth_dumps``/``write_trajectories`` gate
@@ -95,6 +96,7 @@ def grow_structure(
                     bond_length,
                     num_samples=num_samples,
                     cache=placement_cache,
+                    bridge_bias=bridge_bias,
                     )
                 if not placement_success:
                     excluded_idx.append(idx_connect_to)
