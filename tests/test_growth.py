@@ -215,14 +215,18 @@ def test_deposition_grows_bottom_up(dummy_calc, tmp_path):
     import numpy as np
     from growth.new_growth import grow_structure
 
+    # enough atoms for several layers: fill-fraction leveling keeps a sub-monolayer
+    # film deliberately flat, so the upward-front signature needs a thicker film.
     s = _build_growth_struct(seed=5)
-    grow_structure(s, target_number_atoms=30, target_ratios={"Si": 1, "O": 2},
+    grow_structure(s, target_number_atoms=80, target_ratios={"Si": 1, "O": 2},
                    calculator=dummy_calc, output_dir=tmp_path / "g", mode="deposition")
-    assert len(s) == 30
+    assert len(s) == 80
     z = s.atoms.get_positions()[:, 2]
-    # commit order == index order (no dumps): the first third must sit lower than the
-    # last third -- the front advanced upward.
-    assert z[:10].mean() < z[-10:].mean() - 1.0
+    # commit order == index order (no dumps): fill-fraction leveling keeps the film
+    # deliberately flat, so the signature of an advancing front is a MONOTONIC rise of
+    # the mean height across commit-order quartiles, not a large absolute gap.
+    q = [z[i * 20:(i + 1) * 20].mean() for i in range(4)]
+    assert q[0] < q[1] < q[2] < q[3], f"front did not advance monotonically: {q}"
     # and everything grew from the bottom region: the earliest atoms hug the wall
     assert z[:5].mean() < 8.0
 
@@ -274,3 +278,34 @@ def test_bridge_bias_zero_is_deterministic_default(make_struct):
         place_atom_sphere(s, "O", 0, bond_length=1.6, num_samples=100, bridge_bias=0.0)
         outs.append(s.atoms.get_positions()[-1].copy())
     assert np.allclose(outs[0], outs[1])
+
+
+def test_deposition_front_levels_fill_fraction_across_columns(dummy_calc, tmp_path):
+    import numpy as np
+    from base.initialize import initialize_structure_blank
+    from base.limits import make_limit_flat, fix_limits
+    from growth.new_growth import grow_structure
+
+    # two-level top: columns with x < 10 may grow to z=20 (allowance 15), columns with
+    # x >= 10 only to z=12 (allowance 7). Fill-fraction leveling must give the tall half
+    # proportionally more atoms, so both halves reach a similar FRACTION of their own
+    # ceiling -- the mechanism that makes deposition follow a roughness envelope.
+    s = initialize_structure_blank(cell=[20.0, 20.0, 25.0])
+    s.set_seed(6)
+    make_limit_flat(s, z_val=5.0, is_for="bottom")
+    make_limit_flat(s, z_val=20.0, is_for="top")
+    fix_limits(s.limits, hard_limit="bottom")
+    half = s.limits.nx // 2
+    s.limits.upper_lim[half:, :] = 12.0
+
+    grow_structure(s, target_number_atoms=60, target_ratios={"Si": 1, "O": 2},
+                   calculator=dummy_calc, output_dir=tmp_path / "g", mode="deposition")
+    pos = s.atoms.get_positions()
+    tall = pos[pos[:, 0] < 10.0]
+    short = pos[pos[:, 0] >= 10.0]
+    assert len(tall) > 5 and len(short) > 5
+    f_tall = (np.percentile(tall[:, 2], 90) - 5.0) / 15.0
+    f_short = (np.percentile(short[:, 2], 90) - 5.0) / 7.0
+    # similar fill fractions => the tall half's surface sits physically higher
+    assert abs(f_tall - f_short) < 0.35
+    assert np.percentile(tall[:, 2], 90) > np.percentile(short[:, 2], 90) + 1.0
