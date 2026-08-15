@@ -297,21 +297,20 @@ def _near_growth_face(amorphous_struct, indices, margin: float = 2.5) -> np.ndar
     pos = amorphous_struct.atoms.get_positions()
     cell = amorphous_struct.atoms.cell.lengths()
     p = pos[np.asarray(indices, dtype=int)]
-    # bottom: distance to the lower growth limit at the candidate's grid cell (the film
-    # rests on the wall, so the envelope IS the surface there)
-    ix = np.clip((p[:, 0] / lim.dx).astype(int), 0, lim.nx - 1)
-    iy = np.clip((p[:, 1] / lim.dy).astype(int), 0, lim.ny - 1)
-    mask |= p[:, 2] < (lim.lower_lim[ix, iy] + margin)
-    # top: distance to the LOCAL ATOMIC surface (max z within a 3 A lateral neighbourhood,
-    # MIC), NOT the growth envelope -- a deposition film underfills its fourier ceiling
-    # (worst at rough alphas), where envelope distance classifies every real-surface site
-    # as interior and silently disables the partition.
+    # BOTH faces use the LOCAL ATOMIC surface (min/max z within a 3 A lateral MIC
+    # neighbourhood), never the growth envelope: a deposition film underfills its fourier
+    # ceiling (envelope-top classified every real-surface site as interior), and in a
+    # substrate run everything below lower_lim is substrate, so an envelope-bottom band
+    # classified the WHOLE substrate as preferred surface and planted caps inside it.
+    # The local criterion handles all cases: grown-from-blank bottoms, deposition
+    # underfill, and a loaded substrate whose true exposed face is its underside.
     dxy = pos[None, :, :2] - p[:, None, :2]
     dxy -= np.round(dxy / cell[:2]) * cell[:2]
     lat2 = (dxy ** 2).sum(-1)
     for k in range(len(p)):
-        local_top = pos[lat2[k] < 9.0, 2].max()
-        mask[k] |= p[k, 2] > local_top - margin
+        col = pos[lat2[k] < 9.0, 2]
+        mask[k] |= p[k, 2] > col.max() - margin
+        mask[k] |= p[k, 2] < col.min() + margin
     return mask
 
 
@@ -348,10 +347,17 @@ def _break_and_cap_step(amorphous_struct, current_charge, bond_lengths, num_samp
                    if amorphous_struct.oxidation.get(k, 0) > 0 for i in v]
     if not indices:
         indices = find_tetrogonal_sites(amorphous_struct)
-    # surface partition: repurpose surface-band defects first, so the resulting cap
-    # terminates an exposed face instead of decorating the bulk (interior defects are
-    # left for the relax, which heals coordination without adding OH).
-    indices = _prefer_surface(amorphous_struct, indices)
+    # surface partition, STRICT on this path: the break-and-cap's whole product is a cap at
+    # the chosen defect, so an interior-only candidate pool would plant bulk OH (seen in the
+    # siral-10 check: after saturation the surface is coordination-complete, every defect is
+    # interior, and a soft fallback quietly reproduced the buried caps). With limits present
+    # and no surface-band defect, decline (return None): the caller's direct cap draws from
+    # ALL cations/anions, which virtually always includes surface atoms, and it always makes
+    # progress -- interior defects are left for the relax, which heals without adding OH.
+    lim = amorphous_struct.limits
+    if indices and lim is not None and lim.lower_lim is not None:
+        face = _near_growth_face(amorphous_struct, indices)
+        indices = [i for i, m in zip(indices, face) if m]
     move = select_idx_for_move(amorphous_struct, indices) if indices else None
     if move is None:
         return None

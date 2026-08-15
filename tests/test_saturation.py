@@ -437,11 +437,13 @@ def test_saturation_reproducible_across_hash_seeds(tmp_path):
 
 def _charged_pair_struct(make_struct, with_limits=True):
     from base.limits import make_limit_flat, fix_limits
-    # two identical under-coordinated Si (CN 1 each, via one shared... separate O's), one
-    # near the top face (z=17) and one interior (z=11): same CN, so only the surface
-    # partition decides which anchors the neutralising -OH cap.
-    s = make_struct(["Si", "O", "Si", "O"],
-                    [[10, 10, 17.0], [11.62, 10, 17.0], [10, 10, 11.0], [11.62, 10, 11.0]],
+    # two identical under-coordinated Si (CN 1 each), one at the top face (z=17) and one
+    # interior (z=11, with occupied volume BELOW it so the local-surface criterion sees a
+    # true interior, not an underside): same CN, so only the surface partition decides
+    # which anchors the neutralising -OH cap.
+    s = make_struct(["Si", "O", "Si", "O", "O"],
+                    [[10, 10, 17.0], [11.62, 10, 17.0], [10, 10, 11.0], [11.62, 10, 11.0],
+                     [10, 10, 8.0]],
                     cell=(20.0, 20.0, 24.0))
     if with_limits:
         make_limit_flat(s, z_val=4.0, is_for="bottom")
@@ -487,8 +489,9 @@ def test_charge_cap_surface_criterion_survives_envelope_underfill(make_struct):
     # (z=13) is 9 A under the limit (z=22): an envelope-distance criterion calls it
     # interior and silently disables the partition; the local-atomic-surface criterion
     # must still classify it as surface and win over the buried candidate.
-    s = make_struct(["Si", "O", "Si", "O"],
-                    [[10, 10, 13.0], [11.62, 10, 13.0], [10, 10, 9.0], [11.62, 10, 9.0]],
+    s = make_struct(["Si", "O", "Si", "O", "O"],
+                    [[10, 10, 13.0], [11.62, 10, 13.0], [10, 10, 9.0], [11.62, 10, 9.0],
+                     [10, 10, 5.5]],
                     cell=(20.0, 20.0, 26.0))
     make_limit_flat(s, z_val=6.0, is_for="bottom")
     make_limit_flat(s, z_val=22.0, is_for="top")
@@ -498,3 +501,25 @@ def test_charge_cap_surface_criterion_survives_envelope_underfill(make_struct):
     assert _add_charge_cap(s, want_negative=True, bond_lengths=None, num_samples=250)
     g = s.get_graph(force_rebuild=True)
     assert g.has_edge(len(s) - 2, 0), "cap must land on the film's real surface"
+
+
+def test_charge_cap_never_prefers_substrate_interior(make_struct):
+    from base.limits import make_limit_flat, fix_limits
+    from saturation.new_sat import _near_growth_face
+    import numpy as np
+    # substrate run: lower_lim sits at the substrate TOP, so an envelope-based bottom
+    # band called the whole substrate "surface" and planted caps inside it (seen in the
+    # siral-10 check: a cap H at z=4.4 inside a 0-7.4 A substrate). With the local
+    # criterion only the substrate's true underside and the film top classify as faces.
+    #        z:  1.0 (underside)  4.0 (substrate mid)  8.0 (interface)  12.0 (film top)
+    s = make_struct(["Al", "Al", "Al", "Si"],
+                    [[10, 10, 1.0], [10, 10, 4.0], [10, 10, 8.0], [10, 10, 12.0]],
+                    cell=(20.0, 20.0, 24.0))
+    make_limit_flat(s, z_val=7.0, is_for="bottom")    # substrate top = growth floor
+    make_limit_flat(s, z_val=18.0, is_for="top")
+    fix_limits(s.limits)
+    mask = _near_growth_face(s, [0, 1, 2, 3])
+    assert bool(mask[0]) is True,  "substrate underside is a real exposed face"
+    assert bool(mask[1]) is False, "substrate mid must NEVER be preferred cap territory"
+    assert bool(mask[2]) is False, "buried interface is not an exposed face"
+    assert bool(mask[3]) is True,  "film top is a face"
