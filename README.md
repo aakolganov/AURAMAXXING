@@ -167,8 +167,11 @@ coordination:               # optional; partial overrides merge onto the derived
   oxidation: {Ti: 4}                       # per-element signed oxidation state (sign = cation/anion)
   max_cn: {Al: 4}                          # per-element max coordination
   min_cn: {Al: 3}                          # per-element saturation floor
-  distance: {bond_factor: 1.0, bond_dev: 0.15, cutoff_pad: 0.25, collision_factor: 0.75}
-                                           # covalent-radii distance-model knobs (all optional)
+  distance: {bond_factor: 1.0, bond_dev: 0.15, cutoff_pad: 0.25, collision_factor: 0.75,
+             class_floor_scale: 1.0}       # covalent-radii distance-model knobs (all optional);
+                                           # class_floor_scale multiplies the same-class
+                                           # (non-bonding) exclusion floors — ~0.9 packs silica
+                                           # without growth jams (see base/element_data.py)
   cut_offs: {Si-O: 1.95}                   # raw "El-El" cutoff override (must stay >= window upper)
   cn_distr:                                # expected coordination-number distribution per element
     Si: 4                                  # a single CN -> all Si are CN 4 (the only expected CN)
