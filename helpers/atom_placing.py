@@ -61,6 +61,54 @@ def build_placement_cache(amorphous_struct: AmorphousStruc) -> tuple:
     return cell_dims, trees
 
 
+def _bridge_weights(amorphous_struct, atom_type, idx_anchor, candidates, trees, bias):
+    """Connectivity score for each candidate position of ``atom_type`` (bonded to the
+    anchor): weight (1 + bias)^(n_useful - n_saturated), where n_useful counts additional
+    opposite-oxidation-sign atoms with spare capacity whose (element, atom_type) bond
+    cutoff the candidate falls inside -- capped at the placed atom's own remaining
+    capacity -- and n_saturated counts contacts crowding an already-saturated bystander.
+    Candidates that would be born over the placed atom's max CN are zeroed, unless that
+    zeroes every candidate (then the over-CN guard is dropped rather than failing a
+    placement the collision rules allow). Everything is table-driven: oxidation signs,
+    per-atom max CN (cn_distr variants included), per-pair cutoffs."""
+    ox = amorphous_struct.oxidation
+    placed_sign = ox.get(atom_type, 0) > 0
+    cn = np.asarray(amorphous_struct.get_cn())
+    max_cn = amorphous_struct.max_cn_array()
+    own_capacity = int(amorphous_struct.max_cn.get(atom_type, 10**6)) - 1  # anchor takes one
+    cut_offs = amorphous_struct.cut_offs
+
+    n_useful = np.zeros(len(candidates), dtype=int)
+    n_sat = np.zeros(len(candidates), dtype=int)
+    for element, (tree, idx_global) in trees.items():
+        if (ox.get(element, 0) > 0) == placed_sign:
+            continue                                   # same class: never a bond partner
+        cutoff = cut_offs.get((element, atom_type)) or cut_offs.get((atom_type, element))
+        if cutoff is None:
+            continue
+        has_capacity = cn[idx_global] < max_cn[idx_global]
+        anchor_local = None
+        if idx_anchor in idx_global:
+            anchor_local = int(np.searchsorted(idx_global, idx_anchor))
+        for i, hits in enumerate(tree.query_ball_point(candidates, r=cutoff)):
+            for h in hits:
+                if h == anchor_local:
+                    continue                           # the anchor bond is the given
+                if has_capacity[h]:
+                    n_useful[i] += 1
+                else:
+                    n_sat[i] += 1
+
+    # a saturated-bystander contact is still a real born bond: the over-own-CN guard must
+    # count ALL contacts, not just the useful ones
+    over_own = (n_useful + n_sat) > own_capacity
+    n_useful = np.minimum(n_useful, own_capacity)
+    w = (1.0 + bias) ** (n_useful - n_sat)
+    if not over_own.all():
+        w[over_own] = 0.0
+    return w / w.sum()
+
+
 def place_atom_sphere(
         amorphous_struct: AmorphousStruc,
         atom_type: str,
@@ -68,6 +116,7 @@ def place_atom_sphere(
         bond_length: float,
         num_samples: int = 100,
         cache: tuple | None = None,
+        bridge_bias: float = 0.0,
     ) -> bool:
     """
     Placement with simultaneous spherical
@@ -76,6 +125,14 @@ def place_atom_sphere(
     Pass ``cache`` (from ``build_placement_cache``) to reuse the per-element
     collision trees across attempts on an unchanged structure; otherwise one is
     built for this call.
+
+    ``bridge_bias`` > 0 turns the uniform pick over valid candidates into a weighted
+    one that prefers *bridging* sites: each additional opposite-oxidation-sign atom
+    with spare capacity whose bond cutoff the candidate falls inside multiplies its
+    weight by (1 + bridge_bias); contact with a saturated bystander divides by the
+    same factor; a candidate that would be born over its own max CN gets weight 0
+    (unless every candidate would be, then the guard is dropped). 0.0 keeps the
+    historical uniform pick bit-for-bit (no extra rng consumption).
     """
 
     # Per-element collision trees: reuse the caller's cache (structure is fixed
@@ -140,8 +197,15 @@ def place_atom_sphere(
     if len(final_candidates) == 0:
         return False # Sterically blocked
 
-    # 5. Pick a valid placement and commit
-    chosen_idx = amorphous_struct.rng.choice(len(final_candidates))
+    # 5. Pick a valid placement and commit. With bridge_bias the pick is weighted toward
+    # candidates that complete the network (born bridging instead of dangling); without it
+    # the historical uniform pick is preserved exactly (including its rng consumption).
+    if bridge_bias > 0:
+        w = _bridge_weights(amorphous_struct, atom_type, idx_anchor, final_candidates,
+                            trees, bridge_bias)
+        chosen_idx = amorphous_struct.rng.choice(len(final_candidates), p=w)
+    else:
+        chosen_idx = amorphous_struct.rng.choice(len(final_candidates))
     chosen_pos = final_candidates[chosen_idx]
 
     amorphous_struct.commit_atom(atom_type, position=chosen_pos)
@@ -151,10 +215,15 @@ def place_atom_sphere(
 def place_atom_most_z_space(
         amorphous_struct: AmorphousStruc,
         atom_type: str,
+        mode: str = "default",
     ) -> None:
     """
-    Place the initial atom somewhere within the limits that has a large 
+    Place the initial atom somewhere within the limits that has a large
     amount of local surrounding volume.
+
+    ``mode="deposition"`` seeds at the BOTTOM boundary of the chosen cell instead of
+    mid-height: growth then advances as an upward-sweeping front, so the bottom face
+    densifies first while the space above it is still open.
     """
     limits: Limits = amorphous_struct.limits
     rng = amorphous_struct.rng
@@ -179,7 +248,11 @@ def place_atom_most_z_space(
     # Adding 0.5 places the atom in the exact middle of the X/Y grid cell
     x = (ix + 0.5) * limits.dx
     y = (iy + 0.5) * limits.dy
-    z = limits.lower_lim[ix, iy] + 0.5 * dz[ix, iy]
+    if mode == "deposition":
+        # just above the wall: the first monolayer IS the intended bottom termination
+        z = limits.lower_lim[ix, iy] + 1.0
+    else:
+        z = limits.lower_lim[ix, iy] + 0.5 * dz[ix, iy]
 
     amorphous_struct.commit_atom(atom_type, position=np.array([x, y, z]))
 
@@ -289,6 +362,7 @@ def place_atom_terminal(
     # Count, per candidate, how many atoms OTHER than the anchor lie within their bonding
     # cutoff -- i.e. how many bystanders the cap would bond to (and thus over-coordinate).
     bystander_bonds = np.zeros(len(candidates), dtype=int)
+    bystander_near = np.zeros(len(candidates), dtype=int)
     pair_cutoffs = amorphous_struct.cut_offs
     for element in np.unique(symbols):
         cutoff = pair_cutoffs.get((atom_type, element))
@@ -299,15 +373,24 @@ def place_atom_terminal(
         idx_global = np.where(symbols == element)[0]
         tree = cKDTree(positions[idx_global], boxsize=cell_dims)
         hits = tree.query_ball_point(candidates, r=cutoff)
+        # near-contacts: within 1.25x the bond cutoff -- not a bond, but close enough to
+        # crowd the bystander (a cap H at 1.5 A from a second O reads as a clash and often
+        # becomes a bond in the next relax). Used as a tie-break below.
+        near_hits = tree.query_ball_point(candidates, r=1.25 * cutoff)
         anchor_local = int(np.searchsorted(idx_global, idx_anchor)) if element == anchor_symbol else None
-        for i, hit in enumerate(hits):
+        for i, (hit, nhit) in enumerate(zip(hits, near_hits)):
             if anchor_local is not None:
                 bystander_bonds[i] += sum(1 for h in hit if h != anchor_local)
+                bystander_near[i] += sum(1 for h in nhit if h != anchor_local)
             else:
                 bystander_bonds[i] += len(hit)
+                bystander_near[i] += len(nhit)
 
-    # Prefer a candidate that bonds only the anchor (zero bystanders); else the fewest.
+    # Prefer a candidate that bonds only the anchor (zero bystanders); else the fewest --
+    # and among those, the fewest NEAR-contacts, so a committed cap also stays clear of
+    # almost-bonding neighbours where geometry allows.
     best = np.where(bystander_bonds == bystander_bonds.min())[0]
+    best = best[bystander_near[best] == bystander_near[best].min()]
     chosen_pos = candidates[amorphous_struct.rng.choice(best)]
 
     amorphous_struct.commit_atom(atom_type, position=chosen_pos)

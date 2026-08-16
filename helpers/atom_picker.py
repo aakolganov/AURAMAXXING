@@ -3,7 +3,7 @@ from base import AmorphousStruc
 from typing import Optional
 
 
-def choose_atom_idx_to_attach_to(amorphous_struct: AmorphousStruc, atom_type: str, weight_z: bool = True, added_weights: Optional[callable]=None, exclude_indices: Optional[list[int]] = None, all_cn: Optional[np.ndarray] = None) -> int:
+def choose_atom_idx_to_attach_to(amorphous_struct: AmorphousStruc, atom_type: str, weight_z: bool = True, added_weights: Optional[callable]=None, exclude_indices: Optional[list[int]] = None, all_cn: Optional[np.ndarray] = None, z_mode: str = "mid") -> int:
     symbols = np.array(amorphous_struct.symbols)
     # Coordination numbers don't change across retries on the same structure, so a
     # caller in a retry loop can compute them once and pass them in to avoid the
@@ -60,8 +60,40 @@ def choose_atom_idx_to_attach_to(amorphous_struct: AmorphousStruc, atom_type: st
     # if we want to weight also by z-coordinate:
     if weight_z:
         zpos = amorphous_struct.atoms.get_positions()[sub, 2]
-        w = np.exp(-((zpos - zpos.mean()) ** 2))
-        w = np.ones_like(zpos) if np.allclose(w, 0) else w / w.sum()
+        if z_mode == "front":
+            # Deposition mode: prefer the least-filled COLUMNS of the limits grid, each
+            # measured against its own local allowance (fill fraction f = (z - lower) /
+            # (upper - lower) at the anchor's (x, y) cell). Leveling the *fraction* makes
+            # the film's surface a scaled copy of the roughness envelope at every stage
+            # of growth -- peak columns receive proportionally more atoms than valleys --
+            # so alpha stays meaningful, unlike a flat absolute-z front that never touches
+            # the ceiling. The front reference spans ALL eligible candidates (any CN), so
+            # a nearly-buried incomplete site keeps pulling growth back down. lambda = 0.1
+            # fill units (~1 A of compliance on a 12 A region). With flat limits f is
+            # proportional to z and this reduces to the plain bottom-up front.
+            lim = amorphous_struct.limits
+            if lim is not None and lim.upper_lim is not None and lim.lower_lim is not None:
+                pos_all = amorphous_struct.atoms.get_positions()
+
+                def _fill_frac(idx):
+                    p = pos_all[idx]
+                    ix = np.clip((p[:, 0] / lim.dx).astype(int), 0, lim.nx - 1)
+                    iy = np.clip((p[:, 1] / lim.dy).astype(int), 0, lim.ny - 1)
+                    lo = lim.lower_lim[ix, iy]
+                    dz = np.maximum(lim.upper_lim[ix, iy] - lo, 1e-6)
+                    return (p[:, 2] - lo) / dz
+
+                f_sub = _fill_frac(sub)
+                f_front = _fill_frac(cand).min()
+                w = np.exp(-(f_sub - f_front) / 0.1)
+            else:
+                # no limits installed (direct API use): plain bottom-up front
+                z_front = amorphous_struct.atoms.get_positions()[cand, 2].min()
+                w = np.exp(-(zpos - z_front) / 2.0)
+            w = np.ones_like(zpos) if np.allclose(w, 0) else w / w.sum()
+        else:
+            w = np.exp(-((zpos - zpos.mean()) ** 2))
+            w = np.ones_like(zpos) if np.allclose(w, 0) else w / w.sum()
     
     if added_weights is not None:
         w = added_weights(amorphous_struct, w, sub)

@@ -31,7 +31,7 @@ def analyze_structure(struct, is_saturation: bool = False,
     Returns a dict of raw distributions (plain Python lists, JSON-friendly). When
     ``is_saturation`` is False the ``saturation`` entry is ``None``. ``surface_opts`` (from
     ``cfg.statistics.surface``: ``{enabled, probe, n_points, overrides}``) parameterises the
-    saturation-only cap areal-density metric; when omitted it uses defaults (enabled, probe 0).
+    saturation-only cap areal-density metric; when omitted it uses defaults (enabled, probe 1.84 = BET-N₂ gauge).
     """
     atoms = struct.atoms
     n = len(atoms)
@@ -152,7 +152,7 @@ def analyze_structure(struct, is_saturation: bool = False,
                 cap_counts = {label: len(v) for label, v in cap_distances.items()}
                 out["cap_areal_density"] = cap_areal_density(
                     struct, cap_counts, sum(cap_counts.values()),
-                    probe=float(opts.get("probe", 0.0)),
+                    probe=float(opts.get("probe", 1.84)),
                     n_points=int(opts.get("n_points", 200)),
                     overrides=opts.get("overrides") or None)
             except Exception as exc:   # keep the rest of the metrics dict intact

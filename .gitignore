@@ -38,5 +38,8 @@ log.log
 before_opt.vasp
 highlighted_*.xyz
 number_*.xyz
+prod_and_manuscript/
 # Large ML potential weights (keep out of git; distribute separately)
 *.model
+
+

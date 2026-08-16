@@ -191,6 +191,9 @@ growth:                     # all optional (defaults shown)
   per_anchor_attempts: 100
   num_samples: 100
   anneal: {T_ini: 2000, T_fin: 300, steps: 250, interval: 10}
+  mode: default             # "deposition" = bottom-seeded, fill-fraction-levelled front:
+                            # dense bulk-like bottom face, envelope imprinted throughout growth
+  bridge_bias: 0.0          # >0 weights placement toward network-completing (bridging) sites
 
 finalize:                   # optional
   fmax: 0.1
@@ -204,13 +207,17 @@ charge_correction: {enabled: false, max_iterations: 1000, num_samples: 250, move
 
 statistics:        {enabled: true, per_structure: true, pooled: true}   # analysis plots + stats.json
 # statistics.surface (saturation runs): surface cap-group areal concentration (groups/nm²),
-# normalised by the true VdW surface area. Defaults {enabled: true, probe: 0.0, n_points: 200,
-# vdw_overrides: {}}. probe 0 = bare VdW surface, ~1.4 = solvent-accessible; n_points = Shrake–Rupley
-# sampling per atom (accuracy vs speed); vdw_overrides = {element: radius Å}.
+# normalised by the probed Shrake–Rupley surface area. Defaults {enabled: true, probe: 1.84,
+# n_points: 200, vdw_overrides: {}}. probe 1.84 Å = BET-N₂ gauge (experiment-comparable),
+# ~1.4 = water-accessible, 0 = bare VdW surface (counts every crevice and internal void;
+# comparable to no experiment); n_points = sampling per atom; vdw_overrides = {element: radius Å}.
 
 debug:             {write_growth_dumps: false, write_trajectories: false} # optional; off by default
-# write_growth_dumps: per-atom xyz snapshot after every placement (many files, heavy I/O)
-# write_trajectories: anneal + finalize trajectory files. Both are debug-only; keep off
+# write_growth_dumps: per-atom xyz snapshot after every placement (many files, heavy I/O),
+#   growth-region .obj meshes + mesh_manifest.json, and per-step saturation/ and charge/
+#   animation frames
+# write_trajectories: anneal trajectories + per-stage relax trajectories
+#   (opt_growth/opt_saturation/opt_charge/opt_rules). Both are debug-only; keep off
 # for large/parallel ensembles. Trajectories/logs are written into each structure's own dir.
 
 rules:                      # optional list, applied after saturation
@@ -370,9 +377,9 @@ a `stats.json` next to each structure, and a pooled set across the sweep in `out
 - **cap_distance.png**, **caps_per_cation.png** — saturation runs only: cap bond-length
   distributions per cap pair (O–H, Si–F, O–Na, …) and the number of capping groups per cation.
 - **cap_areal_density.png** — saturation runs only: surface cap-group **areal concentration**
-  (groups/nm²) per cap type and total, normalised by the true van-der-Waals surface area of the slab
-  (a periodic Shrake–Rupley surface) rather than the projected box face — so a Fourier-roughened top,
-  whose real area exceeds Lx·Ly, is measured correctly. Tune via the `statistics.surface` block
+  (groups/nm²) per cap type and total, normalised by the probed Shrake–Rupley surface area of the
+  slab (BET-N₂ gauge, probe 1.84 Å, by default) rather than the projected box face — so a
+  Fourier-roughened top, whose real area exceeds Lx·Ly, is measured correctly. Tune via the `statistics.surface` block
   (`probe`, `n_points`, `vdw_overrides`).
 
 For large ensembles, set `statistics.per_structure: false` to skip the per-structure plots

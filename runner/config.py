@@ -346,19 +346,28 @@ class GrowthSpec:
     per_anchor_attempts: int = 100
     num_samples: int = 100
     anneal: Optional[dict] = None   # {T_ini, T_fin, steps, interval}; None -> grow defaults
+    mode: str = "default"           # "deposition": bottom-seeded, front-following growth
+    bridge_bias: float = 0.0        # >0: placement prefers network-completing (bridging) sites
 
     @classmethod
     def from_dict(cls, d: dict, where: str) -> "GrowthSpec":
         d = _as_dict(d, where)
-        _check_keys(d, {"max_placement_attempts", "per_anchor_attempts", "num_samples", "anneal"}, where)
+        _check_keys(d, {"max_placement_attempts", "per_anchor_attempts", "num_samples", "anneal",
+                        "mode", "bridge_bias"}, where)
         anneal = d.get("anneal")
         if anneal is not None:
             _check_keys(_as_dict(anneal, f"{where}.anneal"),
                         {"T_ini", "T_fin", "steps", "interval"}, f"{where}.anneal")
+        mode = _check_choice(d.get("mode", "default"), {"default", "deposition"}, f"{where}.mode")
+        bridge_bias = float(d.get("bridge_bias", 0.0))
+        if bridge_bias < 0:
+            raise ValueError(f"{where}.bridge_bias must be >= 0 (got {bridge_bias})")
         return cls(max_placement_attempts=int(d.get("max_placement_attempts", 1000)),
                    per_anchor_attempts=int(d.get("per_anchor_attempts", 100)),
                    num_samples=int(d.get("num_samples", 100)),
-                   anneal=anneal)
+                   anneal=anneal,
+                   mode=mode,
+                   bridge_bias=bridge_bias)
 
 
 @dataclass
@@ -522,12 +531,15 @@ class ChargeCorrectionSpec:
 
 @dataclass
 class SurfaceSpec:
-    """Surface cap-group areal-concentration metric: caps per nm², normalised by the true
-    van-der-Waals surface area (periodic Shrake–Rupley). ``probe`` 0 = bare VdW surface,
-    ~1.4 Å = solvent-accessible; ``n_points`` is the per-atom sphere sampling (accuracy vs speed);
-    ``vdw_overrides`` is an optional ``{element: radius Å}`` map."""
+    """Surface cap-group areal-concentration metric: caps per nm², normalised by the probed
+    surface area (periodic Shrake–Rupley). The default ``probe`` of 1.84 Å is the BET-N₂ gauge,
+    making the density comparable to experimental silanol numbers (Zhuravlev-style); ~1.4 Å is
+    the water-accessible gauge; 0 is the bare VdW surface, which counts every atomic crevice
+    and internal void and is not comparable to any experiment.
+    ``n_points`` is the per-atom sphere sampling (accuracy vs speed); ``vdw_overrides`` is an
+    optional ``{element: radius Å}`` map."""
     enabled: bool = True
-    probe: float = 0.0
+    probe: float = 1.84
     n_points: int = 200
     vdw_overrides: dict = field(default_factory=dict)
 
@@ -537,7 +549,7 @@ class SurfaceSpec:
         _check_keys(d, {"enabled", "probe", "n_points", "vdw_overrides"}, where)
         overrides = _as_dict(d.get("vdw_overrides", {}) or {}, f"{where}.vdw_overrides")
         return cls(enabled=bool(d.get("enabled", True)),
-                   probe=float(d.get("probe", 0.0)),
+                   probe=float(d.get("probe", 1.84)),
                    n_points=int(d.get("n_points", 200)),
                    vdw_overrides={str(k): float(v) for k, v in overrides.items()})
 

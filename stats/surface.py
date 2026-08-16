@@ -75,8 +75,8 @@ def sasa_surface_area(positions: np.ndarray, symbols, cell_dims, *, probe: float
     ``positions`` (N×3, Å), ``symbols`` (length N), ``cell_dims`` = ``(Lx, Ly, Lz)``. The surface is
     periodic in x,y and open (vacuum) in z, so only the top and bottom faces are exposed -- there are
     no side faces. ``n_points`` sphere-sample points per atom trade accuracy for speed (~200 is
-    converged for these slabs). ``probe`` = 0 gives the bare VdW surface; ~1.4 Å gives the
-    solvent-accessible surface.
+    converged for these slabs). ``probe`` defaults to 1.84 Å (BET-N₂ gauge); ~1.4 Å is water-accessible; 0 is the
+    bare VdW surface (counts every crevice and internal void, comparable to no experiment).
     """
     positions = np.asarray(positions, dtype=float)
     n = len(positions)

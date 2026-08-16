@@ -204,10 +204,10 @@ def _generate_one(cfg: RunConfig, seed: int, roughness: Optional[float],
     workdir = out_path.parent
     g, f, dbg = cfg.growth, cfg.finalize, cfg.debug
 
-    def _finalize(calc):
+    def _finalize(calc, traj_name="final_opt"):
         finalize_structure(struct, calculator=calc, fmax=f.fmax, max_steps=f.max_steps,
                            traj_interval=f.traj_interval, workdir=workdir,
-                           write_trajectories=dbg.write_trajectories)
+                           write_trajectories=dbg.write_trajectories, traj_name=traj_name)
 
     grow_structure(
         amorphous_struct=struct,
@@ -218,12 +218,14 @@ def _generate_one(cfg: RunConfig, seed: int, roughness: Optional[float],
         per_anchor_attempts=g.per_anchor_attempts,
         num_samples=g.num_samples,
         anneal_params=g.anneal,
+        mode=g.mode,
+        bridge_bias=g.bridge_bias,
         output_dir=workdir / "growth",
         workdir=workdir,
         write_growth_dumps=dbg.write_growth_dumps,
         write_trajectories=dbg.write_trajectories,
     )
-    _finalize(growth_calc)
+    _finalize(growth_calc, traj_name="opt_growth")
 
     # Dump pre-saturation structure if requested
     if dbg.pre_saturation_dump:
@@ -233,27 +235,30 @@ def _generate_one(cfg: RunConfig, seed: int, roughness: Optional[float],
 
     if cfg.saturation.enabled:
         sat = cfg.saturation
-        saturate_under_coordinated(struct, num_samples=sat.num_samples)
-        _finalize(sat_calc)
+        _dump = dbg.write_growth_dumps
+        saturate_under_coordinated(struct, num_samples=sat.num_samples,
+                                   dump_dir=(workdir / "saturation" if _dump else None))
+        _finalize(sat_calc, traj_name="opt_saturation")
         if cfg.charge_correction.enabled:
             cc = cfg.charge_correction
             correct_charge(struct, max_iterations=cc.max_iterations,
-                           num_samples=cc.num_samples, move_alpha=cc.move_alpha)
-            _finalize(sat_calc)
+                           num_samples=cc.num_samples, move_alpha=cc.move_alpha,
+                           dump_dir=(workdir / "charge" if _dump else None))
+            _finalize(sat_calc, traj_name="opt_charge")
         # Swap the engine's -OH/H reference caps for the run's fragments (e.g. F, Na). No-op for
         # the default OH/H, so the default path's geometry and relax cost are unchanged.
         if (sat.negative_fragment != DEFAULT_NEG_FRAGMENT
                 or sat.positive_fragment != DEFAULT_POS_FRAGMENT):
             relabel_caps(struct, negative_fragment=sat.negative_fragment,
                          positive_fragment=sat.positive_fragment)
-            _finalize(sat_calc)
+            _finalize(sat_calc, traj_name="opt_relabel")
 
     if cfg.rules:
         modifier = PeriodicStructureModifier(struct)
         for rule_spec in cfg.rules:
             modifier.add_rule(_build_rule(rule_spec))
         modifier.optimize()
-        _finalize(sat_calc)
+        _finalize(sat_calc, traj_name="opt_rules")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     struct.atoms.write(str(out_path), format=cfg.run.output_format)

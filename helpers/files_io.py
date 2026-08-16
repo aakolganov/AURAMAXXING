@@ -3,11 +3,15 @@ from pathlib import Path
 from base import AmorphousStruc
 
 def write_structure_to_file(amorphous_struct: AmorphousStruc, file_name: Path, write_xyz: bool=False, append: bool=True) -> None:
-    amorphous_struct.sort_atoms()
+    # Write a species-sorted COPY (VASP needs species grouping). Sorting the live structure
+    # here would reorder atom indices mid-run, so a dumps-on run would consume a different
+    # RNG stream than a dumps-off run -- dumps must be pure observers of the trajectory.
+    atoms = amorphous_struct.atoms.copy()
+    atoms = atoms[atoms.numbers.argsort()]
     file_path = str(file_name)
-    amorphous_struct.atoms.write(file_path + ".vasp", format="vasp", append=False)
+    atoms.write(file_path + ".vasp", format="vasp", append=False)
     if write_xyz:
-        amorphous_struct.atoms.write(file_path +".xyz", format="xyz", append=append)
+        atoms.write(file_path +".xyz", format="xyz", append=append)
 
 
 def highlight_coordination(amorphous_struct, output_file: str) -> None:

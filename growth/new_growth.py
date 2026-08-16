@@ -1,4 +1,5 @@
 import os
+import json
 from typing import Optional
 from tqdm import tqdm
 from pathlib import Path
@@ -10,6 +11,7 @@ from base import AmorphousStruc
 from helpers.atom_picker import pick_next_atom_type, choose_atom_idx_to_attach_to
 from base.limits import move_limits
 from helpers.files_io import write_structure_to_file
+from helpers.mesh_io import write_growth_region_mesh
 
 DEFAULT_ANNEAL_PARAMS = {"T_ini": 2000, "T_fin": 300, "steps": 250, "interval": 10}
 
@@ -27,6 +29,8 @@ def grow_structure(
         workdir: Optional[Path] = None,
         write_growth_dumps: bool = False,
         write_trajectories: bool = False,
+        mode: str = "default",
+        bridge_bias: float = 0.0,
     ):
     # ``workdir`` is this slab's own directory; anneal logs/trajectories go there so
     # concurrent runs never collide. ``write_growth_dumps``/``write_trajectories`` gate
@@ -46,6 +50,13 @@ def grow_structure(
     # given set_seed() makes the whole growth reproducible.
     np.random.seed(int(amorphous_struct.rng.integers(2**31 - 1)))
 
+    # When growth dumps are on we also snapshot the *growth region* (the allowed-to-grow
+    # volume, upper_lim/lower_lim) as an .obj mesh so a renderer can overlay it on each
+    # frame. move_limits() ratchets the region up on every melt-quench jam, so we only emit
+    # a new mesh when the region actually changed and record which frame it belongs to.
+    _prev_upper = None
+    _mesh_manifest = []
+
     num_placement_attempts = 0
     with tqdm(total=target_number_atoms, initial=len(amorphous_struct)) as pbar:
         while len(amorphous_struct) < target_number_atoms and num_placement_attempts < max_placement_attempts:
@@ -54,7 +65,7 @@ def grow_structure(
 
             atom_to_add = pick_next_atom_type(amorphous_struct, target_ratios)
             if current_number_atoms == 0:
-                place_atom_most_z_space(amorphous_struct, atom_to_add)
+                place_atom_most_z_space(amorphous_struct, atom_to_add, mode=mode)
                 pbar.update(1)
                 continue
             
@@ -65,7 +76,8 @@ def grow_structure(
             all_cn = amorphous_struct.get_cn()
             placement_cache = build_placement_cache(amorphous_struct)
 
-            idx_connect_to = choose_atom_idx_to_attach_to(amorphous_struct, atom_to_add, all_cn=all_cn)
+            idx_connect_to = choose_atom_idx_to_attach_to(amorphous_struct, atom_to_add, all_cn=all_cn,
+                                                             z_mode="front" if mode == "deposition" else "mid")
 
             current_iter = 0
             placement_success = False
@@ -84,16 +96,26 @@ def grow_structure(
                     bond_length,
                     num_samples=num_samples,
                     cache=placement_cache,
+                    bridge_bias=bridge_bias,
                     )
                 if not placement_success:
                     excluded_idx.append(idx_connect_to)
                     # If placement fails, pick a different anchor
-                    idx_connect_to = choose_atom_idx_to_attach_to(amorphous_struct, atom_to_add, exclude_indices=excluded_idx, all_cn=all_cn)  # Try different connection point if placement failed
+                    idx_connect_to = choose_atom_idx_to_attach_to(amorphous_struct, atom_to_add, exclude_indices=excluded_idx, all_cn=all_cn,
+                                                                  z_mode="front" if mode == "deposition" else "mid")  # Try different connection point if placement failed
             
             if placement_success:
                 pbar.update(1)
                 if write_growth_dumps:
                     write_structure_to_file(amorphous_struct, output_dir/f"dump_{num_placement_attempts}", write_xyz=True)
+                    lim = amorphous_struct.limits
+                    if lim is None or lim.upper_lim is None or lim.lower_lim is None:
+                        pass                      # no (full) limits: dumps only, no region mesh
+                    elif _prev_upper is None or not np.array_equal(lim.upper_lim, _prev_upper):
+                        mesh_name = f"mesh_{num_placement_attempts}.obj"
+                        write_growth_region_mesh(lim.upper_lim, lim.lower_lim, lim.dx, lim.dy, output_dir/mesh_name)
+                        _mesh_manifest.append({"frame": num_placement_attempts, "mesh": mesh_name})
+                        _prev_upper = lim.upper_lim.copy()
 
             else:
                 # Melt-and-quench to relieve the steric jam: start hot, cool to ~RT.
@@ -114,7 +136,11 @@ def grow_structure(
                 pbar.n = len(amorphous_struct)
                 pbar.refresh()
                 move_limits(amorphous_struct)
-    
+
+    if write_growth_dumps and _mesh_manifest:
+        with open(output_dir/"mesh_manifest.json", "w") as f:
+            json.dump(_mesh_manifest, f, indent=2)
+
     return len(amorphous_struct) == target_number_atoms
 
 
@@ -127,6 +153,7 @@ def finalize_structure(
     traj_interval: int = 1,
     workdir: Optional[Path] = None,
     write_trajectories: bool = False,
+    traj_name: str = "final_opt",
     ):
     if calculator is None:
         raise ValueError("a calculator (CalculatorInterface) is required")
@@ -136,7 +163,7 @@ def finalize_structure(
         amorphous_struct.atoms,
         fmax=fmax,
         max_steps=max_steps,
-        traj_name="final_opt" if write_trajectories else None,
+        traj_name=traj_name if write_trajectories else None,
         traj_fmt="xyz",
         interval=traj_interval,
         workdir=workdir,

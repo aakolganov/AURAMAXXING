@@ -197,7 +197,7 @@ def test_debug_dumps_off_by_default_then_isolated_per_slab(tmp_path, monkeypatch
     cfg.statistics.enabled = False
     run_from_config(cfg)                          # debug defaults: everything off
     out = tmp_path / "out"
-    assert not list(out.rglob("final_opt.xyz"))   # no trajectories
+    assert not list(out.rglob("opt_*.xyz"))       # no relaxation trajectories
     assert not list(out.rglob("traj.xyz"))
     assert not list(out.rglob("growth/dump_*"))   # no per-atom growth snapshots
 
@@ -206,10 +206,10 @@ def test_debug_dumps_off_by_default_then_isolated_per_slab(tmp_path, monkeypatch
     cfg2.debug.write_trajectories = True
     run_from_config(cfg2)
     out2 = tmp_path / "out2"
-    trajs = list(out2.rglob("final_opt.xyz"))
-    assert len(trajs) == 2                                   # one per slab
+    trajs = list(out2.rglob("opt_growth.xyz"))
+    assert len(trajs) == 2                                   # one per slab (growth-stage relax)
     assert all("seed" in t.parent.name for t in trajs)       # in each slab's own dir
-    assert not (shared / "final_opt.xyz").exists()           # not the shared dump
+    assert not (shared / "opt_growth.xyz").exists()          # not the shared dump
 
 
 def test_pool_from_config_rebuilds_from_disk(tmp_path, monkeypatch):
