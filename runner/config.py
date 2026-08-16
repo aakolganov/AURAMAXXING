@@ -784,9 +784,13 @@ def _build_coordination(d: Optional[dict], where: str, *, elements, oxidation,
                    **({str(k): int(v) for k, v in _as_dict(d["min_cn"], f"{where}.min_cn").items()}
                       if d and "min_cn" in d else {})}
 
+    # cn_distr is parsed before the table build: its variant CNs raise an element's
+    # effective CN, which keys the same-class exclusion derivation (edge-sharing).
+    cn_distr = _parse_cn_distr(d["cn_distr"], f"{where}.cn_distr") if d and "cn_distr" in d else {}
     tables = build_element_tables(elements, spectator_elements=spectators,
                                   distance_knobs=distance_knobs,
-                                  oxidation=oxidation, max_cn=max_cn_over, min_cn=min_cn_over)
+                                  oxidation=oxidation, max_cn=max_cn_over, min_cn=min_cn_over,
+                                  cn_distr=cn_distr)
     cfg = CoordinationConfig(
         max_cn=tables["max_cn"], min_cn=tables["min_cn"], cut_offs=tables["cut_offs"],
         sample_dist=tables["sample_dist"], d_min_max=tables["d_min_max"],
@@ -796,8 +800,8 @@ def _build_coordination(d: Optional[dict], where: str, *, elements, oxidation,
         bond_factor=float((distance_knobs or {}).get("bond_factor",
                                                      DEFAULT_DISTANCE_KNOBS["bond_factor"])),
     )
-    if d and "cn_distr" in d:
-        cfg.cn_distr.update(_parse_cn_distr(d["cn_distr"], f"{where}.cn_distr"))
+    if cn_distr:
+        cfg.cn_distr.update(cn_distr)
     if d and "cut_offs" in d:
         overrides = _parse_cut_offs(d["cut_offs"], f"{where}.cut_offs")
         _validate_cutoff_overrides(overrides, cfg, f"{where}.cut_offs")

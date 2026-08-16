@@ -54,7 +54,13 @@ the adjustment is reported.
 Per-element **oxidation states and coordination numbers** default from a curated table of
 common oxide formers (`base/element_data.py`); per-pair **bond-length, collision and
 bonding-cutoff distances** are derived from a covalent-radii model (ASE `covalent_radii`), so a
-placed bond is always within its bonding cutoff. All of these are overridable in the
+placed bond is always within its bonding cutoff. Same-oxidation-sign pairs (O···O, Si···Si,
+Si···Al, …) never bond, so their placement exclusion is instead derived from coordination
+geometry: anion–anion from the (strained) polyhedron edge around each cation, cation–cation
+from the corner-sharing bridge floor (120°) — relaxed to edge-sharing (90°) when both cations
+reach CN ≥ 6 (e.g. TiO₂; a `cn_distr` CN-6 fraction counts). Growth also vetoes placements
+that would close a 2-membered ring (two neighbours already sharing a bonded neighbour), with
+the same CN ≥ 6 edge-sharing exemption per atom pair. All of these are overridable in the
 `coordination` block, and an element not in the curated table can be supplied there. A
 `cn_distr` lets a fraction of an element take a different coordination number (and, optionally,
 oxidation) — e.g. ~20% of Al grown at CN 6.

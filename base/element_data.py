@@ -18,6 +18,8 @@ Si-O is ~1.61 A but covalent_radii[Si]+covalent_radii[O] ~ 1.77 A). The generato
 roughly-bonded, collision-free placements; the post-growth relaxation (MLIP/BKS) pulls the
 geometry to true bond lengths. The model factors below are tunable per run.
 """
+import math
+
 from ase.data import atomic_numbers, covalent_radii
 from scipy.stats import uniform
 
@@ -85,6 +87,68 @@ DEFAULT_DISTANCE_KNOBS: dict[str, float] = {
     "cutoff_pad": 0.25,
     "collision_factor": 0.75,
 }
+
+# --- same-class (non-bonding) exclusion geometry ------------------------------------
+# Two same-oxidation-sign atoms never bond in an oxide network; their minimum approach is
+# set by the coordination geometry of the shared counterion path, not by a (meaningless)
+# homonuclear bond cutoff. Anion-anion: the coordination-polyhedron edge around a cation,
+# 2*sin(theta_ideal/2)*d_bond, allowed to compress by EDGE_STRAIN. Cation-cation: the
+# corner-sharing bridge floor 2*sin(theta_bridge/2)*d_bond with theta_bridge = 120 deg;
+# cations whose effective CN reaches EDGE_SHARE_MIN_CN may share polyhedron edges
+# (e.g. rutile-like chains), which relaxes theta_bridge to 90 deg.
+_IDEAL_ANGLE_DEG = {3: 120.0, 4: 109.47, 5: 90.0, 6: 90.0, 7: 72.0}
+EDGE_STRAIN = 0.87
+THETA_BRIDGE_CORNER = 120.0
+THETA_BRIDGE_EDGE = 90.0
+EDGE_SHARE_MIN_CN = 6
+
+
+def _ideal_angle_deg(cn: int) -> float:
+    """Ideal X-M-X angle (deg) for a cation of coordination number ``cn``."""
+    if cn <= 2:
+        return 180.0
+    return _IDEAL_ANGLE_DEG.get(cn, 70.53)   # >= 8: cubic
+
+
+def _same_class_exclusion(a: str, b: str, *, elements, radii, oxidation, effective_cn,
+                          bond_factor: float) -> float | None:
+    """Minimum non-bonded approach (A) for a same-oxidation-sign pair ``(a, b)``,
+    derived from the shortest counterion-bridged path present in ``elements``.
+
+    Returns None when no network-forming counterion (effective CN >= 2 and known
+    oxidation) exists to define the geometry -- the caller keeps the legacy derivation.
+    The two bond lengths of the bridge are combined as a geometric mean, which
+    underestimates the exact law-of-cosines distance and so never over-excludes.
+    """
+    is_cation = oxidation[a] > 0
+    counterions = [c for c in elements
+                   if oxidation.get(c) is not None
+                   and (oxidation[c] > 0) != is_cation
+                   and effective_cn.get(c, 0) >= 2]
+    if not counterions:
+        return None
+
+    if is_cation:
+        # M-O-M bridge: a shared polyhedron edge belongs to BOTH cations, so the relaxed
+        # 90-deg floor applies only when both are edge-sharing-capable (Pauling rule 3:
+        # tetrahedra practically never share edges, octahedra may).
+        edge_capable = (effective_cn.get(a, 0) >= EDGE_SHARE_MIN_CN
+                        and effective_cn.get(b, 0) >= EDGE_SHARE_MIN_CN)
+        theta = THETA_BRIDGE_EDGE if edge_capable else THETA_BRIDGE_CORNER
+        strain = 1.0     # 120/90 deg are already floors, not ideals
+        angles = {c: theta for c in counterions}
+    else:
+        # X-M-X polyhedron edge around each cation, keyed on that cation's CN.
+        strain = EDGE_STRAIN
+        angles = {c: _ideal_angle_deg(effective_cn[c]) for c in counterions}
+
+    best = None
+    for c in counterions:
+        d_ac = bond_factor * (radii[a] + radii[c])
+        d_bc = bond_factor * (radii[b] + radii[c])
+        d = strain * 2.0 * math.sin(math.radians(angles[c]) / 2.0) * math.sqrt(d_ac * d_bc)
+        best = d if best is None else min(best, d)
+    return best
 
 
 def _normalize_cn_variants(spec) -> list:
@@ -172,6 +236,8 @@ def derive_pair_distances(
         bond_dev: float = 0.15,
         cutoff_pad: float = 0.25,
         collision_factor: float = 0.75,
+        oxidation: dict | None = None,
+        effective_cn: dict | None = None,
     ) -> tuple[dict, dict, dict]:
     """Derive coherent per-pair distance tables from ASE covalent radii.
 
@@ -187,6 +253,17 @@ def derive_pair_distances(
     - ``d_min_max[a][b] = [dmin, dmax]`` with ``dmin = collision_factor*(r_a+r_b)`` (the
       different-element exclusion radius, kept below ``lo``) and ``dmax = cutoff`` (the
       same-element exclusion radius == the self-bond cutoff, blocking spurious homo bonds).
+
+    When ``oxidation`` (signed, per element) and ``effective_cn`` (per element; max CN
+    including any cn_distr variants) are given, pairs of the SAME oxidation sign switch to
+    the chemically derived non-bonding exclusion (``_same_class_exclusion``): both dmin and
+    dmax become the coordination-geometry floor, so placement rejects e.g. O..O closer than
+    a strained polyhedron edge instead of only closer than a meaningless O-O bond cutoff.
+    Elements with effective CN < 2 (terminal caps: H, F, Na, ...) or without an oxidation
+    entry (spectators) keep the legacy derivation for all their pairs -- polyhedron
+    geometry does not apply to them. Sampling windows and graph cutoffs are unchanged:
+    same-class pairs are never sampled as bonds, and the bonding cutoff keeps detecting
+    true (defect) homo bonds in relaxed structures.
     """
     # Validate the knobs so the coherence guarantees below cannot be silently broken by a
     # user-tuned 'distance' block: a negative bond_factor/bond_dev, a negative cutoff_pad
@@ -206,6 +283,15 @@ def derive_pair_distances(
 
     elements = list(dict.fromkeys(elements))   # dedup, preserve order
     radii = {e: _covalent_radius(e) for e in elements}
+    oxidation = oxidation or {}
+    effective_cn = effective_cn or {}
+
+    def _class_pair(a: str, b: str) -> bool:
+        """Same-oxidation-sign network pair eligible for the geometric exclusion."""
+        ox_a, ox_b = oxidation.get(a), oxidation.get(b)
+        return (ox_a is not None and ox_b is not None
+                and (ox_a > 0) == (ox_b > 0)
+                and effective_cn.get(a, 0) >= 2 and effective_cn.get(b, 0) >= 2)
 
     sample_dist: dict = {}
     d_min_max: dict = {}
@@ -224,6 +310,20 @@ def derive_pair_distances(
                     f"reduce bond_dev or raise bond_factor")
             cutoff = hi + cutoff_pad
             dmin = collision_factor * r
+            excl = (_same_class_exclusion(a, b, elements=elements, radii=radii,
+                                          oxidation=oxidation, effective_cn=effective_cn,
+                                          bond_factor=bond_factor)
+                    if _class_pair(a, b) else None)
+            if excl is not None:
+                # Non-bonding pair: both indices carry the geometric exclusion, so the
+                # placement rules (same-element uses [1], different-element uses [0])
+                # agree. The dmin-below-window guard below is a bond-pair invariant and
+                # deliberately does not apply -- excluding the whole "bond" window is
+                # exactly the point for a pair that must never bond.
+                windows[b] = uniform(loc=lo, scale=hi - lo)
+                dmm[b] = [excl, excl]
+                pair_cutoffs[(a, b)] = cutoff
+                continue
             # Coherence (enforced, not just asserted in tests): the different-element collision
             # floor must sit strictly below the bond window so a legitimately bonded neighbour
             # is never rejected as a clash. With collision_factor < bond_factor this holds for
@@ -262,6 +362,7 @@ def build_element_tables(
         oxidation: dict | None = None,
         max_cn: dict | None = None,
         min_cn: dict | None = None,
+        cn_distr: dict | None = None,
     ) -> dict:
     """Assemble the per-element and per-pair tables for ``elements``.
 
@@ -277,6 +378,10 @@ def build_element_tables(
     the coordination graph work for them) from covalent radii, but are NOT required to have a
     curated oxidation/CN and are omitted from the per-element tables (the per-atom CN arrays
     tolerate them).
+
+    ``cn_distr`` (normalized ``{el: [{cn, fraction}, ...]}``) feeds only the same-class
+    exclusion derivation: an element's *effective* CN is its max_cn raised to the highest
+    variant CN, so e.g. an Al grown 20% at CN 6 already counts as edge-sharing-capable.
     """
     elements = list(dict.fromkeys(elements))
     spectators = [e for e in dict.fromkeys(spectator_elements or []) if e not in elements]
@@ -299,7 +404,14 @@ def build_element_tables(
 
     # Distances cover the grown elements AND any spectators, so a loaded foreign substrate is a
     # valid collision/graph partner instead of triggering a KeyError during placement.
-    sample_dist, d_min_max, cut_offs = derive_pair_distances(elements + spectators, **knobs)
+    # Spectators are absent from out_ox/effective_cn, so their pairs keep the legacy
+    # derivation (no oxidation class to key the geometric exclusion on).
+    effective_cn = {
+        e: max([out_max[e]] + [v["cn"] for v in (cn_distr or {}).get(e, [])])
+        for e in elements
+    }
+    sample_dist, d_min_max, cut_offs = derive_pair_distances(
+        elements + spectators, oxidation=out_ox, effective_cn=effective_cn, **knobs)
     return {
         "oxidation": out_ox,
         "max_cn": out_max,

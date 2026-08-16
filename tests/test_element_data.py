@@ -122,6 +122,67 @@ def test_cn_distr_rejects_sentinel_collisions():
     assert normalize_cn_distr({"Al": {6: 0.2}}) == {"Al": [{"cn": 6, "fraction": 0.2}]}
 
 
+def test_same_class_exclusions_silica_scale():
+    # With oxidation/CN known (build_element_tables), same-oxidation-sign pairs switch from
+    # the meaningless homo bond cutoff to the coordination-geometry floor: O..O a strained
+    # tetrahedron edge around Si, Si..Si the 120-deg corner-sharing bridge. Both indices
+    # carry the exclusion so the same/different-element placement rules agree.
+    t = build_element_tables(["Si", "O", "H"])
+    dmm = t["d_min_max"]
+    assert dmm["O"]["O"][0] == dmm["O"]["O"][1] == pytest.approx(2.515, abs=0.01)
+    assert dmm["Si"]["Si"][0] == dmm["Si"]["Si"][1] == pytest.approx(3.066, abs=0.01)
+    # the exclusion sits ABOVE the homo bonding cutoff: marginal same-element contacts
+    # (the relax-collapse defect source) can no longer be placed at all
+    assert dmm["O"]["O"][0] > t["cut_offs"][("O", "O")]
+    assert dmm["Si"]["Si"][0] > t["cut_offs"][("Si", "Si")]
+    # bond (opposite-sign) pairs are untouched by the class derivation
+    bare_dmm = derive_pair_distances(["Si", "O", "H"])[1]
+    assert dmm["Si"]["O"] == bare_dmm["Si"]["O"]
+    assert dmm["O"]["H"] == bare_dmm["O"]["H"]
+
+
+def test_terminal_cap_and_spectator_pairs_keep_legacy_derivation():
+    # H (effective CN 1) is a terminal cap, not a network former: polyhedron geometry does
+    # not apply, so every H pair keeps the legacy derivation (Si-H is same-class +/+ but
+    # exempt). Spectators have no oxidation entry and are exempt the same way.
+    t = build_element_tables(["Si", "O", "H"])
+    bare_dmm = derive_pair_distances(["Si", "O", "H"])[1]
+    assert t["d_min_max"]["H"]["H"] == bare_dmm["H"]["H"]
+    assert t["d_min_max"]["Si"]["H"] == bare_dmm["Si"]["H"]
+    t2 = build_element_tables(["Si", "O"], spectator_elements=["C"])
+    bare2 = derive_pair_distances(["Si", "O", "C"])[1]
+    assert t2["d_min_max"]["C"]["C"] == bare2["C"]["C"]
+    assert t2["d_min_max"]["Si"]["C"] == bare2["Si"]["C"]
+
+
+def test_edge_sharing_keyed_on_effective_cn():
+    # Ti (curated max_cn 6) may share polyhedron edges: the Ti..Ti bridge floor relaxes to
+    # 90 deg (rutile-like chains) instead of the 120-deg corner floor, and the O..O edge
+    # around an octahedral cation is the shorter octahedron edge.
+    t = build_element_tables(["Ti", "O", "H"])
+    assert t["d_min_max"]["Ti"]["Ti"][1] == pytest.approx(3.196, abs=0.01)   # 90 deg
+    assert t["d_min_max"]["O"]["O"][1] == pytest.approx(2.781, abs=0.01)     # CN-6 edge
+    # a cn_distr minority variant raises the element's effective CN: 20% CN-6 Al unlocks
+    # Al..Al edge sharing, but Si-Al keeps the corner floor (a shared edge would belong to
+    # the Si tetrahedron too -- Pauling rule 3)
+    t2 = build_element_tables(["Si", "Al", "O", "H"],
+                              cn_distr={"Al": [{"cn": 6, "fraction": 0.2}]})
+    assert t2["d_min_max"]["Al"]["Al"][1] == pytest.approx(2.645, abs=0.01)  # 90 deg
+    assert t2["d_min_max"]["Si"]["Al"][1] == pytest.approx(3.151, abs=0.01)  # 120 deg
+    assert t2["d_min_max"]["Si"]["Al"] == t2["d_min_max"]["Al"]["Si"]
+    # without the distribution, Al (max_cn 4) pairs stay corner-sharing
+    t3 = build_element_tables(["Si", "Al", "O", "H"])
+    assert t3["d_min_max"]["Al"]["Al"][1] == pytest.approx(3.239, abs=0.01)  # 120 deg
+
+
+def test_derive_without_oxidation_keeps_legacy_homo_exclusion():
+    # The bare derivation (no oxidation/effective_cn) is the documented legacy mode:
+    # dmax == cutoff for every pair, including homo pairs.
+    _, dmm, pc = derive_pair_distances(["Si", "O"])
+    assert dmm["O"]["O"][1] == pc[("O", "O")]
+    assert dmm["Si"]["Si"][1] == pc[("Si", "Si")]
+
+
 def test_build_element_tables_shapes_and_overrideable_knobs():
     t = build_element_tables(["Ti", "O"])
     assert set(t) == {"oxidation", "max_cn", "min_cn", "sample_dist", "d_min_max", "cut_offs"}
