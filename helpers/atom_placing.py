@@ -360,6 +360,7 @@ def place_atom_terminal(
     # Count, per candidate, how many atoms OTHER than the anchor lie within their bonding
     # cutoff -- i.e. how many bystanders the cap would bond to (and thus over-coordinate).
     bystander_bonds = np.zeros(len(candidates), dtype=int)
+    bystander_near = np.zeros(len(candidates), dtype=int)
     pair_cutoffs = amorphous_struct.cut_offs
     for element in np.unique(symbols):
         cutoff = pair_cutoffs.get((atom_type, element))
@@ -370,15 +371,24 @@ def place_atom_terminal(
         idx_global = np.where(symbols == element)[0]
         tree = cKDTree(positions[idx_global], boxsize=cell_dims)
         hits = tree.query_ball_point(candidates, r=cutoff)
+        # near-contacts: within 1.25x the bond cutoff -- not a bond, but close enough to
+        # crowd the bystander (a cap H at 1.5 A from a second O reads as a clash and often
+        # becomes a bond in the next relax). Used as a tie-break below.
+        near_hits = tree.query_ball_point(candidates, r=1.25 * cutoff)
         anchor_local = int(np.searchsorted(idx_global, idx_anchor)) if element == anchor_symbol else None
-        for i, hit in enumerate(hits):
+        for i, (hit, nhit) in enumerate(zip(hits, near_hits)):
             if anchor_local is not None:
                 bystander_bonds[i] += sum(1 for h in hit if h != anchor_local)
+                bystander_near[i] += sum(1 for h in nhit if h != anchor_local)
             else:
                 bystander_bonds[i] += len(hit)
+                bystander_near[i] += len(nhit)
 
-    # Prefer a candidate that bonds only the anchor (zero bystanders); else the fewest.
+    # Prefer a candidate that bonds only the anchor (zero bystanders); else the fewest --
+    # and among those, the fewest NEAR-contacts, so a committed cap also stays clear of
+    # almost-bonding neighbours where geometry allows.
     best = np.where(bystander_bonds == bystander_bonds.min())[0]
+    best = best[bystander_near[best] == bystander_near[best].min()]
     chosen_pos = candidates[amorphous_struct.rng.choice(best)]
 
     amorphous_struct.commit_atom(atom_type, position=chosen_pos)

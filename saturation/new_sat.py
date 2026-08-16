@@ -170,6 +170,46 @@ def hetero_cn(amorphous_struct: AmorphousStruc) -> np.ndarray:
     return cn
 
 
+def drop_detached_anion_fragments(amorphous_struct, bond_lengths=None, num_samples: int = 250) -> int:
+    """Remove detached all-anion fragments and repay their formal charge as surface caps.
+
+    An MLIP relax can eject a weakly bound species from the surface (seen in production: a
+    detached O2 after the growth relax). Left in place, saturation blindly caps its dangling
+    anions and manufactures gas-phase artefacts (that O2 became a free H2O2). Instead: every
+    connected component other than the main slab whose atoms are ALL anions is deleted, and
+    its formal charge is repaid by placing one -OH group (net -1) per unit of removed
+    negative charge on the slab itself (an O2 fragment = 2 x O^2- = 4 -OH groups), so the
+    net charge ledger is unchanged. Components containing cations are left alone with a
+    warning -- caps cannot represent a detached cation cluster. Returns atoms removed."""
+    import networkx as nx
+    graph = amorphous_struct.get_graph(force_rebuild=True)
+    comps = sorted(nx.connected_components(graph), key=len, reverse=True)
+    if len(comps) <= 1:
+        return 0
+    ox = amorphous_struct.oxidation
+    symbols = amorphous_struct.symbols
+    to_drop: list = []
+    charge_to_repay = 0
+    for comp in comps[1:]:
+        if all(ox.get(symbols[i], 0) < 0 for i in comp):
+            to_drop += list(comp)
+            charge_to_repay += sum(-ox.get(symbols[i], 0) for i in comp)
+        else:
+            print(f"[saturation] WARNING: detached fragment "
+                  f"{''.join(sorted(symbols[i] for i in comp))} contains cations; left in place")
+    if not to_drop:
+        return 0
+    mask = np.zeros(len(amorphous_struct), dtype=bool)
+    mask[to_drop] = True
+    amorphous_struct.remove_atom(mask)
+    # repay on the slab: one -OH per unit of removed |charge|, via the direct-cap machinery
+    # (network-capable anchors, surface-preferred, hetero-CN tie-break)
+    for _ in range(charge_to_repay):
+        _add_charge_cap(amorphous_struct, want_negative=True, bond_lengths=bond_lengths,
+                        num_samples=num_samples)
+    return len(to_drop)
+
+
 def collect_over_or_under_cn_atoms(amorphous_struct: AmorphousStruc, do_under: bool):
     # UNDER-coordination is judged on hetero-only CN (too few IONIC bonds -- a homo contact
     # must not satisfy a valence); OVER-coordination keeps the full-graph CN (too many bonds
@@ -280,6 +320,9 @@ def saturate_under_coordinated(
     # runs don't write a file into the working directory.
     if highlight_file is not None:
         highlight_coordination(amorphous_struct, highlight_file)
+    dropped = drop_detached_anion_fragments(amorphous_struct, bond_lengths, num_samples)
+    if dropped:
+        print(f"[saturation] dropped {dropped} detached anion-fragment atoms (charge repaid as -OH)")
     undr_cn = collect_over_or_under_cn_atoms(amorphous_struct, do_under=True)
 
     # Optional per-cap trajectory dump for animating the saturation stage: one xyz frame
@@ -298,12 +341,15 @@ def saturate_under_coordinated(
         for attach_idx in idx_list:
             if is_cation:
                 # negative fragment -OH: O on the cation (tagged NEG_CAP), then H on that O.
+                # Bystander-aware placement: 9.9% of blind-placed cap H were born divalent
+                # and 28.7% of cap O born bridging two Si; terminal placement bonds only the
+                # anchor where geometry allows and stays clear of near-contacts.
                 _place_neg_cap(amorphous_struct, attach_idx, bond_lengths, num_samples,
-                               _try_then_force_place)
+                               place_atom_terminal)
             else:
                 # positive fragment H on the anion (tagged POS_CAP).
                 _place_pos_cap(amorphous_struct, attach_idx, bond_lengths, num_samples,
-                               _try_then_force_place)
+                               place_atom_terminal)
             if _traj is not None:
                 amorphous_struct.atoms.write(_traj, format="xyz", append=True)
 
@@ -372,6 +418,12 @@ def _break_and_cap_step(amorphous_struct, current_charge, bond_lengths, num_samp
                    if amorphous_struct.oxidation.get(k, 0) > 0 for i in v]
     if not indices:
         indices = find_tetrogonal_sites(amorphous_struct)
+    # caps are never break material: a bridging OH reads as an over-coordinated anion, and
+    # breaking it off its cation converts the cap into water (seen in production) while
+    # worsening the cation it leaves behind. Repurposing is for NETWORK defects only.
+    roles = amorphous_struct.atoms.arrays.get("cap_role")
+    if roles is not None and indices:
+        indices = [i for i in indices if roles[i] == CAP_NONE]
     # surface partition, STRICT on this path: the break-and-cap's whole product is a cap at
     # the chosen defect, so an interior-only candidate pool would plant bulk OH (seen in the
     # siral-10 check: after saturation the surface is coordination-complete, every defect is
@@ -507,6 +559,8 @@ def correct_charge(
             os.remove(_traj)
         amorphous_struct.atoms.write(_traj, format="xyz", append=True)
 
+    # a fragment can also detach during the saturation-stage relax
+    drop_detached_anion_fragments(amorphous_struct, bond_lengths, num_samples)
     current_charge = amorphous_struct.charge()
     iteration = 0
     while current_charge != 0 and iteration < max_iterations:

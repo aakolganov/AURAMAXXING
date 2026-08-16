@@ -576,3 +576,85 @@ def test_over_collection_keeps_full_graph_basis(make_struct):
     assert g.has_edge(1, 3)
     over = collect_over_or_under_cn_atoms(s, do_under=False)
     assert 1 in [int(i) for i in over.get("O", [])]
+
+
+# --- detached all-anion fragments: drop + repay charge as -OH, never cap in place ---------
+# An MLIP relax can eject a weakly bound O2; blind capping turned it into gas-phase H2O2
+# (seen in production). The fragment is dropped and its formal charge repaid on the slab.
+
+def test_detached_o2_dropped_and_repaid_as_hydroxyls(make_struct):
+    import numpy as np
+    from saturation.new_sat import saturate_under_coordinated
+    d = 1.62
+    # a small saturable network (Si + 2 O) ... plus a detached O2 far away
+    s = make_struct(["Si", "O", "O", "O", "O"],
+                    [[10, 10, 10], [10 + d, 10, 10], [10 - d, 10, 10],
+                     [4, 4, 16], [4, 4, 17.3]],
+                    cell=(20.0, 20.0, 22.0))
+    from saturation.new_sat import drop_detached_anion_fragments
+    q0 = s.charge()
+    removed = drop_detached_anion_fragments(s)
+    assert removed == 2
+    # the pass itself is ledger-neutral: -4 removed with the O2, -4 repaid as 4 -OH groups
+    assert s.charge() == q0, "fragment charge must be repaid exactly (ledger-neutral pass)"
+    syms = np.array(s.symbols)
+    assert list(syms).count("H") == 4 and list(syms).count("O") == 6   # 2 network + 4 cap O
+    pos = s.atoms.get_positions()
+    dd = np.sqrt(((pos - np.array([4, 4, 16.5])) ** 2).sum(1))
+    assert not (dd < 2.0).any(), "detached O2 must be removed, not capped in place"
+    saturate_under_coordinated(s)   # and the full stage still runs cleanly afterwards"
+
+
+def test_detached_cation_fragment_is_left_alone(make_struct, capsys):
+    from saturation.new_sat import drop_detached_anion_fragments
+    # a detached SiO cluster contains a cation: must NOT be silently deleted
+    s = make_struct(["Si", "O", "O", "Si", "O"],
+                    [[10, 10, 10], [11.62, 10, 10], [8.38, 10, 10],
+                     [4, 4, 16], [4, 4, 17.77]],
+                    cell=(20.0, 20.0, 22.0))
+    removed = drop_detached_anion_fragments(s)
+    assert removed == 0
+    assert "WARNING" in capsys.readouterr().out
+    assert len(s) == 5
+
+
+# --- saturation caps are bystander-aware (terminal placement) -----------------------------
+
+def test_saturation_cap_avoids_bystander_bond(make_struct):
+    import numpy as np
+    from saturation.new_sat import saturate_under_coordinated
+    # dangling O#1 (on Si#0) needs an H cap; bystander O#2 sits 2.1 A away, so part of the
+    # H sphere would bond BOTH oxygens. Terminal placement must bond only the anchor.
+    s = make_struct(["Si", "O", "O", "Si"],
+                    [[10, 10, 10], [11.62, 10, 10], [12.6, 10, 11.7], [13.4, 10, 13.2]],
+                    cell=(20.0, 20.0, 24.0))
+    saturate_under_coordinated(s)
+    syms = np.array(s.symbols)
+    pos = s.atoms.get_positions()
+    L = s.atoms.cell.lengths()
+    for i in np.where(syms == "H")[0]:
+        d = pos[np.array(syms) == "O"] - pos[i]
+        d -= np.round(d / L) * L
+        n_o = int((np.sqrt((d**2).sum(1)) < 1.2).sum())
+        assert n_o == 1, "cap H must bond exactly its anchor oxygen"
+
+
+# --- break-and-cap must never select a cap as break material ------------------------------
+
+def test_break_step_never_breaks_existing_caps(make_struct):
+    from saturation.new_sat import (_break_and_cap_step, _set_cap_role, NEG_CAP, OH_H)
+    d = 1.62
+    # a bridging OH: cap-O#3 bonded to Si#0 AND Si#4, carrying H#5 -> full CN 3 (over max 2),
+    # the only over-CN anion in the system. As a cap it must be excluded -> step declines.
+    s = make_struct(["Si", "O", "O", "O", "Si", "H"],
+                    [[10, 10, 10], [10 + d, 10, 10], [10 - d, 10, 10],
+                     [10, 11.3, 11.0], [10, 11.3, 12.9], [10.7, 11.8, 10.8]],
+                    cell=(20.0, 20.0, 24.0))
+    _set_cap_role(s, 3, NEG_CAP)
+    _set_cap_role(s, 5, OH_H)
+    assert int(s.get_cn(3)) > 2, "fixture: the cap-O must read over-coordinated"
+    out = _break_and_cap_step(s, current_charge=2, bond_lengths=None,
+                              num_samples=100, move_alpha=0.5)
+    assert out is None, "with only cap material available the break step must decline"
+    g = s.get_graph(force_rebuild=True)
+    assert g.has_edge(3, 0) or g.has_edge(3, 4), "the OH bridge must remain intact"
