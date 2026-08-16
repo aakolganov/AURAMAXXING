@@ -258,7 +258,7 @@ def _generate_one(cfg: RunConfig, seed: int, roughness: Optional[float],
         for rule_spec in cfg.rules:
             modifier.add_rule(_build_rule(rule_spec))
         modifier.optimize()
-        _finalize(sat_calc)
+        _finalize(sat_calc, traj_name="opt_rules")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     struct.atoms.write(str(out_path), format=cfg.run.output_format)

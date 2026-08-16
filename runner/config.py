@@ -535,7 +535,7 @@ class SurfaceSpec:
     surface area (periodic Shrake–Rupley). The default ``probe`` of 1.84 Å is the BET-N₂ gauge,
     making the density comparable to experimental silanol numbers (Zhuravlev-style); ~1.4 Å is
     the water-accessible gauge; 0 is the bare VdW surface, which counts every atomic crevice
-    and internal void (~2.5× the accessible area here) and is not comparable to any experiment.
+    and internal void and is not comparable to any experiment.
     ``n_points`` is the per-atom sphere sampling (accuracy vs speed); ``vdw_overrides`` is an
     optional ``{element: radius Å}`` map."""
     enabled: bool = True

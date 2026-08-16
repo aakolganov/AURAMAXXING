@@ -658,3 +658,16 @@ def test_break_step_never_breaks_existing_caps(make_struct):
     assert out is None, "with only cap material available the break step must decline"
     g = s.get_graph(force_rebuild=True)
     assert g.has_edge(3, 0) or g.has_edge(3, 4), "the OH bridge must remain intact"
+
+
+def test_hetero_cn_ignores_zero_oxidation_neighbours(make_struct):
+    from saturation.new_sat import hetero_cn
+    # an O bridging Si and Al counts both; with Al's oxidation zeroed (foreign substrate
+    # species), the Al-O bond counts for neither side.
+    s = make_struct(["Si", "O", "Al"], [[10, 10, 10], [11.62, 10, 10], [13.4, 10, 10]],
+                    cell=(20.0, 20.0, 20.0))
+    assert int(hetero_cn(s)[1]) == 2
+    s.oxidation = {**s.oxidation, "Al": 0}
+    h = hetero_cn(s)
+    assert int(h[1]) == 1, "zero-oxidation neighbour must not count as coordination"
+    assert int(h[2]) == 0

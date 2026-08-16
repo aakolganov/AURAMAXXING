@@ -99,7 +99,9 @@ def _bridge_weights(amorphous_struct, atom_type, idx_anchor, candidates, trees, 
                 else:
                     n_sat[i] += 1
 
-    over_own = n_useful > own_capacity
+    # a saturated-bystander contact is still a real born bond: the over-own-CN guard must
+    # count ALL contacts, not just the useful ones
+    over_own = (n_useful + n_sat) > own_capacity
     n_useful = np.minimum(n_useful, own_capacity)
     w = (1.0 + bias) ** (n_useful - n_sat)
     if not over_own.all():

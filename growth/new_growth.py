@@ -109,7 +109,9 @@ def grow_structure(
                 if write_growth_dumps:
                     write_structure_to_file(amorphous_struct, output_dir/f"dump_{num_placement_attempts}", write_xyz=True)
                     lim = amorphous_struct.limits
-                    if _prev_upper is None or not np.array_equal(lim.upper_lim, _prev_upper):
+                    if lim is None or lim.upper_lim is None or lim.lower_lim is None:
+                        pass                      # no (full) limits: dumps only, no region mesh
+                    elif _prev_upper is None or not np.array_equal(lim.upper_lim, _prev_upper):
                         mesh_name = f"mesh_{num_placement_attempts}.obj"
                         write_growth_region_mesh(lim.upper_lim, lim.lower_lim, lim.dx, lim.dy, output_dir/mesh_name)
                         _mesh_manifest.append({"frame": num_placement_attempts, "mesh": mesh_name})
