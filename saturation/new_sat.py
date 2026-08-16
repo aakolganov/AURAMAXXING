@@ -149,8 +149,33 @@ def move_atom(
     amorph_struct.atoms.wrap()
 
 
+def hetero_cn(amorphous_struct: AmorphousStruc) -> np.ndarray:
+    """Coordination counted the ionic way: only OPPOSITE-oxidation-sign neighbours count.
+
+    The full bond graph also carries same-element contacts (post-relax Si-Si at ~2.4 Å and
+    peroxide O-O at ~1.5 Å sit inside the derived homo cutoffs), and counting those as
+    coordination let every such defect mask itself AND its partner from saturation: a Si
+    with three O plus one Si-Si contact read as CN 4 and was never capped; 57% of
+    chemically dangling O read as satisfied through their O-O bond. Neighbours with zero
+    oxidation (foreign substrate species) count for neither side."""
+    graph = amorphous_struct.get_graph()
+    symbols = amorphous_struct.symbols
+    ox = amorphous_struct.oxidation
+    sign = np.sign([ox.get(s, 0) for s in symbols])
+    cn = np.zeros(len(symbols), dtype=int)
+    for u, v in graph.edges:
+        if sign[u] * sign[v] < 0:
+            cn[u] += 1
+            cn[v] += 1
+    return cn
+
+
 def collect_over_or_under_cn_atoms(amorphous_struct: AmorphousStruc, do_under: bool):
-    all_cn = amorphous_struct.get_cn()
+    # UNDER-coordination is judged on hetero-only CN (too few IONIC bonds -- a homo contact
+    # must not satisfy a valence); OVER-coordination keeps the full-graph CN (too many bonds
+    # of ANY kind is a defect, and this is what lets break-and-cap target the atoms carrying
+    # homo contacts in the first place).
+    all_cn = hetero_cn(amorphous_struct) if do_under else amorphous_struct.get_cn()
 
     symbols = np.array(amorphous_struct.symbols)
     # sorted(): set iteration order depends on PYTHONHASHSEED, and this dict's order decides the
@@ -439,7 +464,9 @@ def _add_charge_cap(amorphous_struct, want_negative: bool, bond_lengths, num_sam
     # surface partition: among eligible anchors, prefer the face band -- a neutralising
     # cap is surface chemistry; only when no surface candidate exists may it go interior.
     cand = _prefer_surface(amorphous_struct, cand)
-    cn = amorphous_struct.get_cn()
+    # tie-break on hetero-only CN: an atom whose count is propped up by a homo contact is
+    # genuinely needier than its full-graph CN suggests.
+    cn = hetero_cn(amorphous_struct)
     anchor = int(min(cand, key=lambda i: cn[i]))
     if want_negative:
         _place_neg_cap(amorphous_struct, anchor, bond_lengths, num_samples, place_atom_terminal)

@@ -523,3 +523,56 @@ def test_charge_cap_never_prefers_substrate_interior(make_struct):
     assert bool(mask[1]) is False, "substrate mid must NEVER be preferred cap territory"
     assert bool(mask[2]) is False, "buried interface is not an exposed face"
     assert bool(mask[3]) is True,  "film top is a face"
+
+
+# --- saturation must judge UNDER-coordination on hetero-only (ionic) CN -------------------
+# The full bond graph counts same-element contacts (relax-born Si-Si / peroxide O-O inside
+# the homo cutoffs) as coordination, letting those defects mask themselves and their
+# partners from saturation. Hetero-only CN unmasks them; OVER-coordination keeps the
+# full-graph basis so break-and-cap can still target the homo-contact carriers.
+
+def test_saturation_unmasks_si_hidden_by_si_si_contact(make_struct):
+    from saturation.new_sat import saturate_under_coordinated, hetero_cn
+    d = 1.62
+    # Si#0: three O + a bare Si#4 at 2.25 A (inside the legacy 2.3 Si-Si graph cutoff).
+    # Full-graph CN 4 used to mask it; hetero CN is 3, so it must receive an -OH cap.
+    s = make_struct(["Si", "O", "O", "O", "Si"],
+                    [[10, 10, 10], [10 + d, 10, 10], [10 - d, 10, 10], [10, 10 + d, 10],
+                     [10, 10 - 1.3, 11.84]],   # 2.25 A from Si#0, away from the O's
+                    cell=(20.0, 20.0, 22.0))
+    g = s.get_graph(force_rebuild=True)
+    assert g.has_edge(0, 4), "fixture needs the masking Si-Si contact in the graph"
+    assert int(s.get_cn(0)) == 4 and int(hetero_cn(s)[0]) == 3
+    n0 = len(s)
+    saturate_under_coordinated(s)
+    assert hetero_cn(s)[0] == 4, "masked Si must be unmasked and capped to hetero-CN 4"
+    assert len(s) > n0
+
+
+def test_saturation_unmasks_peroxide_oxygen(make_struct):
+    from saturation.new_sat import saturate_under_coordinated, hetero_cn
+    # O#1 bonded to Si#0 and to O#2 (peroxide at 1.6 A < 1.8 O-O cutoff): full CN 2 used
+    # to mask it; hetero CN 1 -> it must receive an H cap. O#2 (hetero CN 1 via its own
+    # Si#3) likewise.
+    s = make_struct(["Si", "O", "O", "Si"],
+                    [[10, 10, 10], [11.62, 10, 10], [12.4, 10, 11.4], [13.2, 10, 12.8]],
+                    cell=(20.0, 20.0, 24.0))
+    g = s.get_graph(force_rebuild=True)
+    assert g.has_edge(1, 2), "fixture needs the O-O bond in the graph"
+    assert int(s.get_cn(1)) == 2 and int(hetero_cn(s)[1]) == 1
+    saturate_under_coordinated(s)
+    h = hetero_cn(s)
+    assert h[1] >= 2 and h[2] >= 2, "peroxide oxygens must be unmasked and capped"
+
+
+def test_over_collection_keeps_full_graph_basis(make_struct):
+    from saturation.new_sat import collect_over_or_under_cn_atoms
+    # O#1 with two Si plus an O-O contact: full CN 3 (over max 2) but hetero CN 2. The
+    # OVER collector must still flag it -- that is how break-and-cap targets homo defects.
+    s = make_struct(["Si", "O", "Si", "O"],
+                    [[10, 10, 10], [11.62, 10, 10], [13.24, 10, 10], [11.62, 10, 11.6]],
+                    cell=(20.0, 20.0, 22.0))
+    g = s.get_graph(force_rebuild=True)
+    assert g.has_edge(1, 3)
+    over = collect_over_or_under_cn_atoms(s, do_under=False)
+    assert 1 in [int(i) for i in over.get("O", [])]
