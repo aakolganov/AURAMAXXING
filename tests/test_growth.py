@@ -363,3 +363,80 @@ def test_growth_dumps_write_meshes_and_stage_frames(dummy_calc, tmp_path):
     assert len(frames[0]) == n0 and len(frames[-1]) == len(s)
     deltas = [len(frames[k + 1]) - len(frames[k]) for k in range(len(frames) - 1)]
     assert deltas and all(d in (1, 2) for d in deltas)
+
+
+# --- 2-ring (second-bridge) veto in place_atom_sphere ------------------------------
+# Placing an atom that bonds two neighbours which already share a bonded neighbour
+# closes a 2-membered ring (edge-sharing polyhedra). The veto drops such candidates
+# before the pick; pairs whose atoms are both edge-sharing-capable (per-atom max CN
+# >= EDGE_SHARE_MIN_CN) are exempt.
+
+def _bridge_struct(make_struct, seed=42):
+    """Si-O-Si corner bridge: both Si bonded to the shared O (legacy cutoff 2.0)."""
+    return make_struct(["Si", "O", "Si"],
+                       [[10.0, 10.0, 10.0], [11.35, 10.0, 10.76], [12.7, 10.0, 10.0]],
+                       seed=seed)
+
+
+def test_second_bridge_mask_vetoes_ring_closure(make_struct):
+    from helpers.atom_placing import _second_bridge_mask, build_placement_cache
+
+    s = _bridge_struct(make_struct)
+    cache = build_placement_cache(s)
+    # candidate O bridging both Si (midway, below the existing bridge) vs a clean site
+    ring_closer = np.array([[11.35, 10.0, 9.2]])
+    clean = np.array([[8.4, 10.0, 10.0]])
+    keep = _second_bridge_mask(s, "O", 0, np.vstack([ring_closer, clean]), cache[1])
+    assert list(keep) == [False, True]
+
+
+def test_second_bridge_mask_exempts_edge_sharing_cn(make_struct):
+    from helpers.atom_placing import _second_bridge_mask, build_placement_cache
+
+    s = _bridge_struct(make_struct)
+    s.max_cn["Si"] = 6           # pretend an edge-sharing-capable (octahedral) cation
+    cache = build_placement_cache(s)
+    ring_closer = np.array([[11.35, 10.0, 9.2]])
+    keep = _second_bridge_mask(s, "O", 0, ring_closer, cache[1])
+    assert list(keep) == [True]
+
+
+def test_placement_never_commits_a_second_bridge(make_struct):
+    from helpers.atom_placing import place_atom_sphere, RING_VETO_NEAR
+
+    # Weakened same-element exclusions reproduce the broken derived tables that let the
+    # O-O "shield" open a ring-closure window (Si-Si down to 2.62, O-O down to 1.72);
+    # only the veto then stands between placement and a second bridge. The committed O
+    # must always stay outside the veto radius of the non-anchor Si.
+    veto_r = RING_VETO_NEAR * 2.0        # legacy Si-O bonding cutoff
+    for seed in range(30):
+        s = make_struct(["Si", "O", "Si"],
+                        [[10.0, 10.0, 10.0], [11.35, 10.0, 10.76], [12.7, 10.0, 10.0]],
+                        seed=seed)
+        # rebind (don't mutate in place: the factory default d_min_max is a SHALLOW copy,
+        # so writing into the inner dicts would leak into every other test's tables)
+        s.d_min_max = {**s.d_min_max,
+                       "O": {**s.d_min_max["O"], "O": [0.99, 1.72]},
+                       "Si": {**s.d_min_max["Si"], "Si": [1.665, 2.62]}}
+        if place_atom_sphere(s, "O", 0, bond_length=1.9, num_samples=400):
+            d = s.atoms.get_distance(len(s) - 1, 2, mic=True)
+            assert d > veto_r, f"seed {seed}: placed O at {d:.2f} A of the bridged Si"
+
+
+# --- place_atom_terminal ranks steric-exclusion clashes ----------------------------
+# A cap with no bystander BOND could still sit inside another atom's d_min_max
+# exclusion (e.g. cap O 2.3 A from a network O) -- exactly the marginal geometry the
+# next relax collapses into a homonuclear bond. Such candidates lose to clash-free ones.
+
+def test_terminal_cap_avoids_same_element_exclusion_clash(make_struct):
+    from helpers.atom_placing import place_atom_terminal
+
+    # num_samples=2 gives exactly two candidates (the +/-y poles). The network O at
+    # (10, 13.95, 10) puts the +y candidate 2.30 A away: inside the O..O exclusion
+    # (2.4) but outside bond (1.8) and near (1.25 x 1.8 = 2.25) -- so without the clash
+    # rank the two candidates tie and the pick is a coin flip; with it, -y always wins.
+    for seed in range(10):
+        s = make_struct(["Si", "O"], [[10.0, 10.0, 10.0], [10.0, 13.95, 10.0]], seed=seed)
+        place_atom_terminal(s, "O", 0, bond_length=1.65, num_samples=2)
+        d = s.atoms.get_distance(len(s) - 1, 1, mic=True)
+        assert d >= 2.4, f"seed {seed}: cap O at {d:.2f} A of the network O"

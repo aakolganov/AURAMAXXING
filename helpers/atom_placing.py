@@ -1,9 +1,18 @@
 from functools import lru_cache
 
 from base.amorphous_structure import AmorphousStruc, Limits
+from base.element_data import EDGE_SHARE_MIN_CN
 import numpy as np
 from scipy.spatial import cKDTree
 from scipy.ndimage import gaussian_filter
+
+# A candidate is vetoed when two of its would-be neighbours already share a bonded
+# neighbour (the placement would close a 2-membered ring / shared polyhedron edge).
+# Partners are collected out to this factor times the bonding cutoff, so candidates that
+# would merely STAGE a 2-ring (second bridge just outside the cutoff, pulled closed by
+# the next relaxation) are vetoed too. 1.25x matches place_atom_terminal's near-contact
+# convention.
+RING_VETO_NEAR = 1.25
 
 def within_z_limits(trial_coord: np.ndarray, limits: Limits) -> bool:
     ix = int((trial_coord[0]) / limits.dx)
@@ -109,6 +118,48 @@ def _bridge_weights(amorphous_struct, atom_type, idx_anchor, candidates, trees, 
     return w / w.sum()
 
 
+def _second_bridge_mask(amorphous_struct, atom_type, idx_anchor, candidates, trees):
+    """Boolean keep-mask over ``candidates``: False where placing ``atom_type`` would give
+    it two neighbours (anchor included, near-contacts within RING_VETO_NEAR x cutoff
+    counted) that already share a bonded neighbour -- i.e. the placement would close (or
+    stage) a 2-membered ring, a shared polyhedron edge. A partner pair whose atoms BOTH
+    have a per-atom max CN >= EDGE_SHARE_MIN_CN is exempt: edge-sharing is legitimate
+    local structure for such coordinations (e.g. rutile-like chains), including cn_distr
+    minority variants via ``max_cn_array``."""
+    ox = amorphous_struct.oxidation
+    placed_sign = ox.get(atom_type, 0) > 0
+    cut_offs = amorphous_struct.cut_offs
+    graph = amorphous_struct.get_graph()
+    max_cn = amorphous_struct.max_cn_array()
+
+    partners = [[idx_anchor] for _ in range(len(candidates))]  # the anchor bond is given
+    for element, (tree, idx_global) in trees.items():
+        if (ox.get(element, 0) > 0) == placed_sign:
+            continue                                   # same class: never a bond partner
+        cutoff = cut_offs.get((element, atom_type)) or cut_offs.get((atom_type, element))
+        if cutoff is None:
+            continue
+        for i, hits in enumerate(tree.query_ball_point(candidates, r=RING_VETO_NEAR * cutoff)):
+            for h in hits:
+                g = int(idx_global[h])
+                if g != idx_anchor:
+                    partners[i].append(g)
+
+    keep = np.ones(len(candidates), dtype=bool)
+    for i, plist in enumerate(partners):
+        for a_i in range(1, len(plist)):
+            for b_i in range(a_i):
+                p, q = plist[a_i], plist[b_i]
+                if max_cn[p] >= EDGE_SHARE_MIN_CN and max_cn[q] >= EDGE_SHARE_MIN_CN:
+                    continue
+                if not set(graph[p]).isdisjoint(graph[q]):
+                    keep[i] = False
+                    break
+            if not keep[i]:
+                break
+    return keep
+
+
 def place_atom_sphere(
         amorphous_struct: AmorphousStruc,
         atom_type: str,
@@ -133,6 +184,13 @@ def place_atom_sphere(
     same factor; a candidate that would be born over its own max CN gets weight 0
     (unless every candidate would be, then the guard is dropped). 0.0 keeps the
     historical uniform pick bit-for-bit (no extra rng consumption).
+
+    Candidates that would close (or stage) a 2-membered ring -- two would-be neighbours
+    that already share a bonded neighbour -- are vetoed before the pick
+    (``_second_bridge_mask``), unless both bridged atoms are edge-sharing-capable
+    (per-atom max CN >= EDGE_SHARE_MIN_CN). If every collision-free candidate is vetoed
+    the placement fails, so the caller retries another anchor. Because the veto filters
+    before ``bridge_bias`` weighting, the bias can no longer reward ring closure.
     """
 
     # Per-element collision trees: reuse the caller's cache (structure is fixed
@@ -196,6 +254,13 @@ def place_atom_sphere(
 
     if len(final_candidates) == 0:
         return False # Sterically blocked
+
+    # 4b. Veto candidates that would close (or stage) a 2-membered ring.
+    keep = _second_bridge_mask(amorphous_struct, atom_type, idx_anchor,
+                               final_candidates, trees)
+    if not keep.any():
+        return False # Every collision-free site closes a 2-ring
+    final_candidates = final_candidates[keep]
 
     # 5. Pick a valid placement and commit. With bridge_bias the pick is weighted toward
     # candidates that complete the network (born bridging instead of dangling); without it
@@ -344,7 +409,9 @@ def place_atom_terminal(
     """Place a terminal cap (``atom_type``) on ``idx_anchor`` at ``bond_length``, choosing a
     position that bonds ONLY to the anchor when one exists -- so a forced cap never
     over-coordinates unrelated ("bystander") atoms. If no bystander-free spot exists, the
-    position with the fewest bystander bonds is used. Always commits (returns ``True``), so a
+    position with the fewest bystander bonds is used; ties are broken by the fewest
+    ``d_min_max`` steric-exclusion clashes (e.g. a cap O inside another O's non-bonded
+    floor), then the fewest near-contacts. Always commits (returns ``True``), so a
     saturation/charge cap is guaranteed.
 
     The anchor itself may still be over-coordinated by the cap (that is the caller's intent in
@@ -362,8 +429,10 @@ def place_atom_terminal(
     # Count, per candidate, how many atoms OTHER than the anchor lie within their bonding
     # cutoff -- i.e. how many bystanders the cap would bond to (and thus over-coordinate).
     bystander_bonds = np.zeros(len(candidates), dtype=int)
+    bystander_clash = np.zeros(len(candidates), dtype=int)
     bystander_near = np.zeros(len(candidates), dtype=int)
     pair_cutoffs = amorphous_struct.cut_offs
+    d_min_max = amorphous_struct.d_min_max
     for element in np.unique(symbols):
         cutoff = pair_cutoffs.get((atom_type, element))
         if cutoff is None:
@@ -373,23 +442,33 @@ def place_atom_terminal(
         idx_global = np.where(symbols == element)[0]
         tree = cKDTree(positions[idx_global], boxsize=cell_dims)
         hits = tree.query_ball_point(candidates, r=cutoff)
+        # steric-exclusion clashes: the same d_min_max rule placement uses (same-element
+        # pairs use the [1] exclusion, different-element the [0] collision floor). A cap
+        # inside a bystander's exclusion radius (e.g. a cap O 2.2 A from a network O) is
+        # the marginal geometry the next relax collapses into a homonuclear bond.
+        pair = d_min_max.get(element, {}).get(atom_type) or d_min_max.get(atom_type, {}).get(element)
+        excl = None if pair is None else (pair[1] if element == atom_type else pair[0])
+        clash_hits = tree.query_ball_point(candidates, r=excl) if excl else [[]] * len(candidates)
         # near-contacts: within 1.25x the bond cutoff -- not a bond, but close enough to
         # crowd the bystander (a cap H at 1.5 A from a second O reads as a clash and often
         # becomes a bond in the next relax). Used as a tie-break below.
         near_hits = tree.query_ball_point(candidates, r=1.25 * cutoff)
         anchor_local = int(np.searchsorted(idx_global, idx_anchor)) if element == anchor_symbol else None
-        for i, (hit, nhit) in enumerate(zip(hits, near_hits)):
+        for i, (hit, chit, nhit) in enumerate(zip(hits, clash_hits, near_hits)):
             if anchor_local is not None:
                 bystander_bonds[i] += sum(1 for h in hit if h != anchor_local)
+                bystander_clash[i] += sum(1 for h in chit if h != anchor_local)
                 bystander_near[i] += sum(1 for h in nhit if h != anchor_local)
             else:
                 bystander_bonds[i] += len(hit)
+                bystander_clash[i] += len(chit)
                 bystander_near[i] += len(nhit)
 
     # Prefer a candidate that bonds only the anchor (zero bystanders); else the fewest --
-    # and among those, the fewest NEAR-contacts, so a committed cap also stays clear of
-    # almost-bonding neighbours where geometry allows.
+    # then the fewest steric-exclusion clashes, then the fewest NEAR-contacts, so a
+    # committed cap also stays clear of almost-bonding neighbours where geometry allows.
     best = np.where(bystander_bonds == bystander_bonds.min())[0]
+    best = best[bystander_clash[best] == bystander_clash[best].min()]
     best = best[bystander_near[best] == bystander_near[best].min()]
     chosen_pos = candidates[amorphous_struct.rng.choice(best)]
 
