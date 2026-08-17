@@ -5,6 +5,8 @@ from tqdm import tqdm
 from pathlib import Path
 import numpy as np
 
+from ase.optimize.optimize import Optimizer
+
 from helpers.atom_placing import place_atom_sphere, place_atom_most_z_space, slice_structure, build_placement_cache
 from interfaces.base_interface import CalculatorInterface
 from base import AmorphousStruc
@@ -151,10 +153,11 @@ def finalize_structure(
     fmax: float = 0.1,
     max_steps: int = 500,
     traj_interval: int = 1,
+    traj_name: str = "final_opt",
     workdir: Optional[Path] = None,
     write_trajectories: bool = False,
-    traj_name: str = "final_opt",
-    ):
+    optimizer: Optimizer | str = "LBFGS",
+):
     if calculator is None:
         raise ValueError("a calculator (CalculatorInterface) is required")
 
@@ -167,6 +170,7 @@ def finalize_structure(
         traj_fmt="xyz",
         interval=traj_interval,
         workdir=workdir,
+        optimizer=optimizer,
     )
     # The optimizer relaxed atoms.positions in place, which the cached coordination graph
     # cannot detect; mark it stale so the next get_cn()/get_graph() (e.g. the saturation

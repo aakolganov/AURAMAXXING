@@ -375,14 +375,24 @@ class FinalizeSpec:
     fmax: float = 0.1
     max_steps: int = 500
     traj_interval: int = 1
+    two_step_opt: bool = (False,)
+    two_step_optimizer_1: str = "FIRE2"
+    two_step_fmax_1: float = (1.0,)
 
     @classmethod
     def from_dict(cls, d: dict, where: str) -> "FinalizeSpec":
         d = _as_dict(d, where)
-        _check_keys(d, {"fmax", "max_steps", "traj_interval"}, where)
-        return cls(fmax=float(d.get("fmax", 0.1)),
-                   max_steps=int(d.get("max_steps", 500)),
-                   traj_interval=int(d.get("traj_interval", 1)))
+        _check_keys(
+            d, {"fmax", "max_steps", "traj_interval", "two_step_opt", "two_step_optimizer_1", "two_step_fmax_1",}, where, 
+        )
+        return cls(
+            fmax=float(d.get("fmax", 0.1)),
+            max_steps=int(d.get("max_steps", 500)),
+            traj_interval=int(d.get("traj_interval", 1)),
+            two_step_opt=bool(d.get("two_step_opt", False)),
+            two_step_optimizer_1=str(d.get("two_step_optimizer_1", "FIRE2")),
+            two_step_fmax_1=float(d.get("two_step_fmax_1", 1.0)),
+        )
 
 
 DEFAULT_POS_FRAGMENT = ("H",)
