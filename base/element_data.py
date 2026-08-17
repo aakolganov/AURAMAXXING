@@ -86,13 +86,6 @@ DEFAULT_DISTANCE_KNOBS: dict[str, float] = {
     "bond_dev": 0.15,
     "cutoff_pad": 0.25,
     "collision_factor": 0.75,
-    # Multiplier on the same-class geometric exclusions (below). 1.0 = the pure derived
-    # polyhedron/bridge floors. A BKS anneal-scheme x floor-scale sweep (silica, deposition)
-    # found ~0.9 optimal: growth then packs without ever jamming (no melt-quench anneals,
-    # which are themselves a defect source), while the placement network stays defect-free.
-    # Values much below ~0.9 re-admit the marginal same-class contacts the floors exist to
-    # prevent (e.g. at 0.85 the silica Si..Si floor drops below the Si-Si bonding cutoff).
-    "class_floor_scale": 1.0,
 }
 
 # --- same-class (non-bonding) exclusion geometry ------------------------------------
@@ -243,7 +236,6 @@ def derive_pair_distances(
         bond_dev: float = 0.15,
         cutoff_pad: float = 0.25,
         collision_factor: float = 0.75,
-        class_floor_scale: float = 1.0,
         oxidation: dict | None = None,
         effective_cn: dict | None = None,
     ) -> tuple[dict, dict, dict]:
@@ -271,9 +263,7 @@ def derive_pair_distances(
     entry (spectators) keep the legacy derivation for all their pairs -- polyhedron
     geometry does not apply to them. Sampling windows and graph cutoffs are unchanged:
     same-class pairs are never sampled as bonds, and the bonding cutoff keeps detecting
-    true (defect) homo bonds in relaxed structures. ``class_floor_scale`` multiplies the
-    geometric floors (see DEFAULT_DISTANCE_KNOBS); it does not touch bond pairs or the
-    exempt (legacy-derived) pairs.
+    true (defect) homo bonds in relaxed structures.
     """
     # Validate the knobs so the coherence guarantees below cannot be silently broken by a
     # user-tuned 'distance' block: a negative bond_factor/bond_dev, a negative cutoff_pad
@@ -290,8 +280,6 @@ def derive_pair_distances(
     if collision_factor >= bond_factor:
         raise ValueError(f"collision_factor ({collision_factor}) must be < bond_factor "
                          f"({bond_factor}) so the collision floor stays below the bond window")
-    if class_floor_scale <= 0:
-        raise ValueError(f"class_floor_scale must be > 0 (got {class_floor_scale})")
 
     elements = list(dict.fromkeys(elements))   # dedup, preserve order
     radii = {e: _covalent_radius(e) for e in elements}
@@ -332,7 +320,6 @@ def derive_pair_distances(
                 # agree. The dmin-below-window guard below is a bond-pair invariant and
                 # deliberately does not apply -- excluding the whole "bond" window is
                 # exactly the point for a pair that must never bond.
-                excl *= class_floor_scale
                 windows[b] = uniform(loc=lo, scale=hi - lo)
                 dmm[b] = [excl, excl]
                 pair_cutoffs[(a, b)] = cutoff

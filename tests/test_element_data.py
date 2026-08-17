@@ -175,24 +175,6 @@ def test_edge_sharing_keyed_on_effective_cn():
     assert t3["d_min_max"]["Al"]["Al"][1] == pytest.approx(3.239, abs=0.01)  # 120 deg
 
 
-def test_class_floor_scale_multiplies_only_class_floors():
-    # The sweep-tuned knob scales the same-class geometric exclusions (0.9 found optimal
-    # for silica: growth packs without jamming, so no defect-seeding melt-quench anneals)
-    # without touching bond pairs, exempt pairs, windows or cutoffs.
-    base = build_element_tables(["Si", "O", "H"])
-    scaled = build_element_tables(["Si", "O", "H"],
-                                  distance_knobs={"class_floor_scale": 0.9})
-    for a, b in [("O", "O"), ("Si", "Si")]:
-        assert scaled["d_min_max"][a][b][0] == pytest.approx(0.9 * base["d_min_max"][a][b][0])
-        assert scaled["d_min_max"][a][b][0] == scaled["d_min_max"][a][b][1]
-    assert scaled["d_min_max"]["Si"]["O"] == base["d_min_max"]["Si"]["O"]   # bond pair
-    assert scaled["d_min_max"]["H"]["H"] == base["d_min_max"]["H"]["H"]     # exempt pair
-    assert scaled["cut_offs"] == base["cut_offs"]
-    with pytest.raises(ValueError, match="class_floor_scale"):
-        derive_pair_distances(["Si", "O"], class_floor_scale=0.0,
-                              oxidation={"Si": 4, "O": -2}, effective_cn={"Si": 4, "O": 2})
-
-
 def test_derive_without_oxidation_keeps_legacy_homo_exclusion():
     # The bare derivation (no oxidation/effective_cn) is the documented legacy mode:
     # dmax == cutoff for every pair, including homo pairs.

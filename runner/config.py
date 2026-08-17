@@ -726,8 +726,7 @@ def _resolve_oxidation(elements, coord_block: Optional[dict], where: str) -> dic
 
 def _parse_distance_knobs(raw, where: str) -> dict:
     d = _as_dict(raw, where)
-    _check_keys(d, {"bond_factor", "bond_dev", "cutoff_pad", "collision_factor",
-                    "class_floor_scale"}, where)
+    _check_keys(d, {"bond_factor", "bond_dev", "cutoff_pad", "collision_factor"}, where)
     return {k: float(v) for k, v in d.items()}
 
 
