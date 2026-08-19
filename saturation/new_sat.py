@@ -168,6 +168,56 @@ def hetero_cn(amorphous_struct: AmorphousStruc) -> np.ndarray:
     return cn
 
 
+def bond_valence_deficits(amorphous_struct: AmorphousStruc) -> np.ndarray:
+    """Per-atom Pauling bond-valence deficit: |ox(i)| minus the valence its opposite-sign
+    neighbours donate, each neighbour j contributing |ox(j)| / hetero_cn(j).
+
+    One formula covers both classes (H is just a CN-1 cation donating 1). Perfect silica
+    scores 0 everywhere; the chemically meaningful non-zero cases are
+        dangling O (one Si)              -> 1.0   (genuinely needs a cap)
+        bridging O on a 4-coordinate Al  -> 0.25  (the AlO4- Bronsted deficit)
+        silanol O / Si-O-Si bridge       -> 0.0   (satisfied)
+        bare CN-3 Si                     -> 1.0
+    so ranking anchors by LARGEST deficit sends charge-correction protons to real local
+    charge deficits (e.g. Si-O(H)-Al sites) instead of whatever the lowest-CN tie-break
+    happened to hit. Neighbours with zero oxidation (foreign substrates) donate nothing;
+    a neighbour with hetero CN 0 is skipped rather than dividing by zero."""
+    graph = amorphous_struct.get_graph()
+    symbols = amorphous_struct.symbols
+    ox = amorphous_struct.oxidation
+    het = hetero_cn(amorphous_struct)
+    q = np.array([ox.get(s, 0) for s in symbols], dtype=float)
+    out = np.abs(q).copy()
+    for u, v in graph.edges:
+        if q[u] * q[v] >= 0:
+            continue
+        if het[v] > 0:
+            out[u] -= abs(q[v]) / het[v]
+        if het[u] > 0:
+            out[v] -= abs(q[u]) / het[u]
+    out[q == 0] = 0.0
+    return out
+
+
+def _carries_hydroxyl(amorphous_struct: AmorphousStruc, idx: int) -> bool:
+    """True when ``idx`` already carries a hydroxyl: for an anion, a monovalent-cation
+    (H-like, per-atom max CN 1) neighbour; for a cation, an anion neighbour that has one.
+    Used to spread charge caps instead of revisiting the same atom -- the old lowest-CN
+    tie-break re-selected a just-capped Si (still the lowest-CN cation) and made ~37%
+    of silanols geminal, vs <~15% in real silica."""
+    graph = amorphous_struct.get_graph()
+    symbols = amorphous_struct.symbols
+    ox = amorphous_struct.oxidation
+    mono = amorphous_struct.max_cn_array() == 1
+
+    def _has_mono_cation(i):
+        return any(mono[j] and ox.get(symbols[j], 0) > 0 for j in graph[i])
+
+    if ox.get(symbols[idx], 0) < 0:
+        return _has_mono_cation(idx)
+    return any(ox.get(symbols[j], 0) < 0 and _has_mono_cation(j) for j in graph[idx])
+
+
 def drop_detached_anion_fragments(amorphous_struct, bond_lengths=None, num_samples: int = 250) -> int:
     """Remove detached all-anion fragments and repay their formal charge as -OH caps.
 
@@ -492,9 +542,12 @@ def _add_charge_cap(amorphous_struct, want_negative: bool, bond_lengths, num_sam
     """Charge-correction fallback: cap an existing atom directly to shift the net charge one unit
     toward zero, used when the bond-break strategy has no over/under/variable-CN site to work with
     (e.g. a fully-coordinated fixed-CN oxide). For ``want_negative`` (slab too positive) add an
-    -OH group (net -1) to a cation; otherwise add an H (net +1) to an anion. The lowest-coordinated
-    eligible atom is chosen, so an under-coordinated site is preferred (the cap then also improves
-    coordination) and a fully-coordinated one is only mildly over-coordinated as a last resort. A
+    -OH group (net -1) to a cation; otherwise add an H (net +1) to an anion. The anchor is the
+    eligible atom with the largest Pauling bond-valence deficit (see
+    ``bond_valence_deficits``): an under-coordinated site is still preferred first, but among
+    saturated sites a real local charge deficit (e.g. the bridging O of an AlO4- unit) now
+    outranks an arbitrary lowest-CN pick, and atoms already carrying a hydroxyl are
+    deprioritised so repeat caps (geminal factories) only happen when nothing else exists. A
     positive net charge guarantees a network cation exists and a negative one an anion, so this
     always makes progress; returns ``False`` only if no network-capable atom of the needed sign
     exists at all (then the slab genuinely has a single charge sign)."""
@@ -515,10 +568,16 @@ def _add_charge_cap(amorphous_struct, want_negative: bool, bond_lengths, num_sam
     # surface partition: among eligible anchors, prefer the face band -- a neutralising
     # cap is surface chemistry; only when no surface candidate exists may it go interior.
     cand = _prefer_surface(amorphous_struct, cand)
-    # tie-break on hetero-only CN: an atom whose count is propped up by a homo contact is
-    # genuinely needier than its full-graph CN suggests.
+    # Rank by Pauling bond-valence deficit (largest first): a dangling O (deficit 1) still
+    # wins, but among saturated anions the bridging O of an AlO4- unit (0.25) now beats a
+    # Si-O-Si (0), so charge protons build Bronsted sites at real local deficits. Then
+    # prefer anchors NOT already carrying a hydroxyl (the old lowest-CN tie-break
+    # re-selected the just-capped Si and over-produced geminal silanols); hetero-only CN
+    # and index keep the choice deterministic.
     cn = hetero_cn(amorphous_struct)
-    anchor = int(min(cand, key=lambda i: cn[i]))
+    deficit = bond_valence_deficits(amorphous_struct)
+    anchor = int(min(cand, key=lambda i: (-deficit[i], _carries_hydroxyl(amorphous_struct, i),
+                                          cn[i], i)))
     if want_negative:
         _place_neg_cap(amorphous_struct, anchor, bond_lengths, num_samples, place_atom_terminal)
     else:
