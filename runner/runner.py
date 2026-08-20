@@ -204,10 +204,51 @@ def _generate_one(cfg: RunConfig, seed: int, roughness: Optional[float],
     workdir = out_path.parent
     g, f, dbg = cfg.growth, cfg.finalize, cfg.debug
 
-    def _finalize(calc, traj_name="final_opt"):
-        finalize_structure(struct, calculator=calc, fmax=f.fmax, max_steps=f.max_steps,
-                           traj_interval=f.traj_interval, workdir=workdir,
-                           write_trajectories=dbg.write_trajectories, traj_name=traj_name)
+    if f.two_step_opt:
+
+        def _finalize(calc, traj_name: str = "final_opt.xyz"):
+            # Step 1 using FIRE
+            finalize_structure(
+                struct,
+                calculator=calc,
+                fmax=f.two_step_fmax_1,  # eV/AA
+                max_steps=f.max_steps,
+                traj_interval=f.traj_interval,
+                workdir=workdir,
+                write_trajectories=dbg.write_trajectories,
+                traj_name=traj_name,
+                optimizer=f.two_step_optimizer_1,
+            )
+            # Step 2 using LBFGS
+            finalize_structure(
+                struct,
+                calculator=calc,
+                fmax=f.fmax,  # eV/AA
+                max_steps=f.max_steps,
+                traj_interval=f.traj_interval,
+                workdir=workdir,
+                write_trajectories=dbg.write_trajectories,
+                traj_name=traj_name,
+                optimizer="BFGS",
+            )
+
+    else:
+
+        def _finalize(
+            calc,
+            traj_name: str = "final_opt.xyz",
+        ):
+            finalize_structure(
+                struct,
+                calculator=calc,
+                fmax=f.fmax,
+                max_steps=f.max_steps,
+                traj_interval=f.traj_interval,
+                workdir=workdir,
+                write_trajectories=dbg.write_trajectories,
+                traj_name=traj_name,
+                optimizer="LBFGS",
+            )
 
     grow_structure(
         amorphous_struct=struct,
