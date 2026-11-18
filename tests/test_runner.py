@@ -368,3 +368,55 @@ def test_cli_bad_config_returns_error(tmp_path, capsys):
     cfg_path.write_text("structure: {cell: [1,1,1]}\n")   # missing required sections
     rc = main(["--dry-run", str(cfg_path)])
     assert rc == 2
+
+
+# --- optional anneal of the dry slab (post_growth_anneal) ---------------------------
+
+def _recording_dummy(tmp_path, events):
+    """An LJ dummy that records the order of its optimize/anneal calls."""
+    from tests.dummy_interface import DummyInterface
+
+    class Recording(DummyInterface):
+        def optimize(self, atoms, **kw):
+            events.append(("optimize",))
+            return super().optimize(atoms, **kw)
+
+        def anneal(self, atoms, T_ini, T_fin, steps=500, **kw):
+            events.append(("anneal", T_ini, T_fin, steps))
+            return super().anneal(atoms, T_ini=T_ini, T_fin=T_fin, steps=steps, **kw)
+
+    return Recording(dump_path=str(tmp_path / "dump"))
+
+
+def test_post_growth_anneal_runs_hold_ramp_then_relax(tmp_path, monkeypatch):
+    events = []
+    monkeypatch.setattr("runner.runner.build_calculator",
+                        lambda spec: _recording_dummy(tmp_path, events))
+    cfg = _blank_cfg(tmp_path, seeds=[0])
+    cfg.statistics.enabled = False
+    cfg.post_growth_anneal.enabled = True
+    # temperatures no growth-time anneal uses (those run 2000 -> 300 K), so the calls are unambiguous
+    cfg.post_growth_anneal.T_hold, cfg.post_growth_anneal.hold_steps = 700.0, 20
+    cfg.post_growth_anneal.T_fin, cfg.post_growth_anneal.ramp_steps = 350.0, 30
+    written = run_from_config(cfg)
+
+    hold, ramp = ("anneal", 700.0, 700.0, 20), ("anneal", 700.0, 350.0, 30)
+    assert events.count(hold) == 1 and events.count(ramp) == 1
+    i = events.index(hold)
+    # growth-stage relaxation, hold, ramp, relaxation: in that order, nothing in between
+    assert events[i - 1:i + 3] == [("optimize",), hold, ramp, ("optimize",)]
+    atoms = read(str(written[0]))
+    assert len(atoms) == 45 and np.all(np.isfinite(atoms.get_positions()))
+    assert atoms.get_velocities() is None or not np.any(atoms.get_velocities())   # written at rest
+
+
+def test_post_growth_anneal_disabled_adds_no_md(tmp_path, monkeypatch):
+    events = []
+    monkeypatch.setattr("runner.runner.build_calculator",
+                        lambda spec: _recording_dummy(tmp_path, events))
+    cfg = _blank_cfg(tmp_path, seeds=[0])
+    cfg.statistics.enabled = False
+    run_from_config(cfg)                          # default: disabled
+    # only growth-time anneals (if any jam occurred) may appear, and those cool: never a hold
+    assert all(e[1] != e[2] for e in events if e[0] == "anneal")
+    assert events[-1] == ("optimize",)            # the run ends with the growth-stage relaxation

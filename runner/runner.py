@@ -227,6 +227,18 @@ def _generate_one(cfg: RunConfig, seed: int, roughness: Optional[float],
     )
     _finalize(growth_calc, traj_name="opt_growth")
 
+    # Optional anneal of the dry slab (hold, then ramp), followed by a second relaxation.
+    # It runs before the pre-saturation dump, so that dump is still the slab that gets capped.
+    pga = cfg.post_growth_anneal
+    if pga.enabled:
+        for stage, T_end, steps in (("hold", pga.T_hold, pga.hold_steps),
+                                    ("ramp", pga.T_fin, pga.ramp_steps)):
+            growth_calc.anneal(
+                struct.atoms, T_ini=pga.T_hold, T_fin=T_end, steps=steps, logfile="log.log",
+                traj_name=f"traj_post_growth_{stage}" if dbg.write_trajectories else None,
+                traj_fmt="xyz", interval=10, workdir=workdir)
+        _finalize(growth_calc, traj_name="opt_post_growth_anneal")
+
     # Dump pre-saturation structure if requested
     if dbg.pre_saturation_dump:
         pre_sat_path = out_path.parent / f"pre_sat_structure.{_EXT[cfg.run.output_format]}"

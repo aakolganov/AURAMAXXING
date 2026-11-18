@@ -423,3 +423,24 @@ def test_disabled_saturation_ignores_misconfigured_fragment():
     d["saturation"] = {"enabled": False, "negative_fragment": "O"}
     cfg = load_config(d)
     assert cfg.saturation.enabled is False
+
+
+def test_post_growth_anneal_off_by_default_and_parsed():
+    # The anneal of the dry slab is opt-in: absent block -> disabled, with the tested protocol
+    # (1 ps at 1800 K, 2 ps ramp to 300 K) as defaults.
+    pga = load_config(_minimal()).post_growth_anneal
+    assert pga.enabled is False
+    assert (pga.T_hold, pga.hold_steps, pga.T_fin, pga.ramp_steps) == (1800.0, 1000, 300.0, 2000)
+
+    d = _minimal()
+    d["post_growth_anneal"] = {"enabled": True, "T_hold": 1500, "hold_steps": 500, "ramp_steps": 800}
+    pga = load_config(d).post_growth_anneal
+    assert pga.enabled is True
+    assert (pga.T_hold, pga.hold_steps, pga.T_fin, pga.ramp_steps) == (1500.0, 500, 300.0, 800)
+
+
+def test_post_growth_anneal_unknown_key_raises():
+    d = _minimal()
+    d["post_growth_anneal"] = {"enabled": True, "steps": 100}
+    with pytest.raises(ValueError, match="steps"):
+        load_config(d)

@@ -385,6 +385,30 @@ class FinalizeSpec:
                    traj_interval=int(d.get("traj_interval", 1)))
 
 
+@dataclass
+class PostGrowthAnnealSpec:
+    """Optional anneal of the dry slab between the growth-stage relaxation and saturation:
+    hold at ``T_hold``, ramp linearly to ``T_fin`` (1 fs steps), then relax again. Off by
+    default. The growth-stage relaxation completes a network that is only partly connected
+    as grown, at 0 K, and freezes in mis-made bonds (five-coordinate Si); a short anneal
+    lets them re-form."""
+    enabled: bool = False
+    T_hold: float = 1800.0
+    hold_steps: int = 1000
+    T_fin: float = 300.0
+    ramp_steps: int = 2000
+
+    @classmethod
+    def from_dict(cls, d: dict, where: str) -> "PostGrowthAnnealSpec":
+        d = _as_dict(d, where)
+        _check_keys(d, {"enabled", "T_hold", "hold_steps", "T_fin", "ramp_steps"}, where)
+        return cls(enabled=bool(d.get("enabled", False)),
+                   T_hold=float(d.get("T_hold", 1800.0)),
+                   hold_steps=int(d.get("hold_steps", 1000)),
+                   T_fin=float(d.get("T_fin", 300.0)),
+                   ramp_steps=int(d.get("ramp_steps", 2000)))
+
+
 DEFAULT_POS_FRAGMENT = ("H",)
 DEFAULT_NEG_FRAGMENT = ("O", "H")
 
@@ -851,6 +875,7 @@ class RunConfig:
     coordination: CoordinationConfig = field(default_factory=CoordinationConfig)
     growth: GrowthSpec = field(default_factory=GrowthSpec)
     finalize: FinalizeSpec = field(default_factory=FinalizeSpec)
+    post_growth_anneal: PostGrowthAnnealSpec = field(default_factory=PostGrowthAnnealSpec)
     saturation: SaturationSpec = field(default_factory=SaturationSpec)
     charge_correction: ChargeCorrectionSpec = field(default_factory=ChargeCorrectionSpec)
     statistics: StatisticsSpec = field(default_factory=StatisticsSpec)
@@ -865,8 +890,8 @@ class RunConfig:
         _check_keys(
             d,
             {"structure", "composition", "limits", "calculators", "coordination",
-             "growth", "finalize", "saturation", "charge_correction", "statistics",
-             "debug", "rules", "run", "dft"},
+             "growth", "finalize", "post_growth_anneal", "saturation", "charge_correction",
+             "statistics", "debug", "rules", "run", "dft"},
             "config",
             required=("structure", "composition", "limits", "calculators"),
         )
@@ -919,6 +944,8 @@ class RunConfig:
             coordination=coordination,
             growth=GrowthSpec.from_dict(d.get("growth", {}), "growth"),
             finalize=FinalizeSpec.from_dict(d.get("finalize", {}), "finalize"),
+            post_growth_anneal=PostGrowthAnnealSpec.from_dict(d.get("post_growth_anneal", {}),
+                                                              "post_growth_anneal"),
             saturation=saturation,
             charge_correction=ChargeCorrectionSpec.from_dict(d.get("charge_correction", {}), "charge_correction"),
             statistics=StatisticsSpec.from_dict(d.get("statistics", {}), "statistics"),

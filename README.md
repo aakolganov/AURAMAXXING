@@ -21,7 +21,8 @@ then chemically terminated. The pipeline stages:
    (see below): oxidation states, coordination numbers and bond-length distances are
    data-driven, and the requested composition is made charge-neutral.
 2. **Finalize** — `growth.new_growth.finalize_structure`: geometry optimization (LBFGS)
-   with the chosen calculator.
+   with the chosen calculator. Optionally followed by an anneal of the dry slab and a second
+   optimization (`post_growth_anneal`, off by default).
 3. **Saturate** — `saturation.new_sat.saturate_under_coordinated`: cap under-coordinated
    cations with –OH and anions with –H (data-driven from the per-element oxidation sign).
 4. **Charge-correct** — `saturation.new_sat.correct_charge`: add H / OH until the net
@@ -207,6 +208,14 @@ growth:                     # all optional (defaults shown)
 finalize:                   # optional
   fmax: 0.1
   max_steps: 500
+
+post_growth_anneal:         # optional; off by default (defaults shown). Anneal of the dry slab
+  enabled: false            # between the growth-stage relaxation and saturation, with the
+  T_hold: 1800              # growth calculator: hold_steps at T_hold, ramp_steps down to T_fin
+  hold_steps: 1000          # (1 fs steps, Langevin), then a second relaxation. The default
+  T_fin: 300                # 3000 MD steps are about five times the force evaluations of a
+                            # slab made without it.
+  ramp_steps: 2000
 
 saturation:        {enabled: false, num_samples: 250}
 # saturation caps default to –OH (cations) / H (anions); override with 1-valent fragments to

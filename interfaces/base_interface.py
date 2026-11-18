@@ -145,10 +145,7 @@ class CalculatorInterface(ABC):
         # Ensure the atoms object uses the interface's calculator
         atoms.calc = self.calc
 
-        # ASE takes the Langevin friction in inverse ASE time units (1 unit = 10.18 fs). The old
-        # default of 0.002 is 0.2 ps^-1, a coupling time of about 5 ps, so a 0.25 ps anneal never
-        # followed its ramp (blocks ended at 3400-4600 K). 0.02 / units.fs couples in 50 fs.
-        # Start from the starting temperature instead of from rest.
+    # Start from the starting temperature instead of from rest.
         if not atoms.has("momenta") or not atoms.get_momenta().any():
             MaxwellBoltzmannDistribution(atoms, temperature_K=T_ini)
             Stationary(atoms)
